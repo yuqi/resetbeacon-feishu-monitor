@@ -7,12 +7,11 @@ Wants=network-online.target
 Type=oneshot
 User=resetbeacon
 Group=resetbeacon
-WorkingDirectory=/opt/resetbeacon-feishu-monitor
+WorkingDirectory=/data/resetbeacon-feishu-monitor
 EnvironmentFile=/etc/resetbeacon-feishu-monitor.env
-ExecStart=/opt/resetbeacon-feishu-monitor/.venv/bin/python -m monitor run-once
+ExecStart=/data/resetbeacon-feishu-monitor/.venv/bin/python -m monitor run-once
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/resetbeacon-feishu-monitor/data
-
+ReadWritePaths=/data/resetbeacon-feishu-monitor/data

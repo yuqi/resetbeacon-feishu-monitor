@@ -89,7 +89,7 @@ uv run pytest
 
 ## systemd
 
-`deploy/` 提供 oneshot service 和五分钟 timer。服务器先执行 `uv sync --no-dev` 生成锁定的 `.venv`；systemd 直接调用该虚拟环境，不要求运行时通过 uv 启动。示例假设安装路径为 `/opt/resetbeacon-feishu-monitor`、运行用户为 `resetbeacon`、环境文件为 `/etc/resetbeacon-feishu-monitor.env`；部署前按服务器规范调整。
+`deploy/` 提供 oneshot service 和五分钟 timer。服务器先执行 `uv sync --locked` 生成锁定的 `.venv`；systemd 直接调用该虚拟环境，不要求运行时通过 uv 启动。当前单元使用部署路径 `/data/resetbeacon-feishu-monitor`、运行用户 `resetbeacon`、环境文件 `/etc/resetbeacon-feishu-monitor.env`。
 
 ```bash
 sudo cp deploy/resetbeacon-feishu-monitor.{service,timer} /etc/systemd/system/
