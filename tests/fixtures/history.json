@@ -3,6 +3,7 @@
     {
       "id": "2092862554632826968",
       "date": "2026-08-26",
+      "kind": "special_global",
       "phase": "official_intent",
       "announcedAt": "2026-08-27T06:31:31.187Z",
       "scope": "all",
@@ -23,4 +24,3 @@
     }
   ]
 }
-

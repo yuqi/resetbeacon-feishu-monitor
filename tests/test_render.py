@@ -25,13 +25,30 @@ def test_history_uses_structured_fields_and_separate_actions() -> None:
     assert card["elements"][0]["text"]["content"] == item["summaryFull"]
     assert card["elements"][1] == {"tag": "hr"}
     assert [field["text"]["content"] for field in card["elements"][2]["fields"]] == [
-        "**类型**\n重置意图",
+        "**类别**\n全局特殊重置",
+        "**阶段**\n官方意图",
         "**状态**\n生效中",
+        "**范围**\n全部用户",
     ]
     note = card["elements"][3]["elements"][0]["content"]
     assert note == "🕒 2026-08-27 14:31:31 UTC+8"
     actions = card["elements"][4]["actions"]
     assert [action["text"]["content"] for action in actions] == ["查看 X 原帖", "查看证据"]
+
+
+def test_unknown_history_classifications_fall_back_to_raw_values() -> None:
+    item = fixture("history.json")["items"][0]
+    item.update(kind="future_kind", phase="future_phase", status="future_status", scope="future_scope")
+
+    message = render_message("history", history_payload(item))
+
+    fields = message["card"]["elements"][2]["fields"]
+    assert [field["text"]["content"] for field in fields] == [
+        "**类别**\nfuture_kind",
+        "**阶段**\nfuture_phase",
+        "**状态**\nfuture_status",
+        "**范围**\nfuture_scope",
+    ]
 
 
 def test_forecast_alert_has_human_labels_and_warning() -> None:

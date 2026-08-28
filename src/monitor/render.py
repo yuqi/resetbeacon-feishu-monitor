@@ -41,8 +41,10 @@ def _history_card(item: dict[str, Any]) -> dict[str, Any]:
         template=template,
         summary=_truncate(str(summary or "（无摘要）")),
         fields=[
-            ("类型", _history_kind_label(kind)),
+            ("类别", _history_category_label(str(item.get("kind") or "unknown"))),
+            ("阶段", _history_phase_label(str(item.get("phase") or "unknown"))),
             ("状态", _status_label(str(item.get("status") or "unknown"))),
+            ("范围", _scope_label(str(item.get("scope") or "unknown"))),
         ],
         published_at=item.get("announcedAt"),
         details=details,
@@ -238,13 +240,20 @@ def format_local_time(value: Any) -> str:
     return instant.astimezone(LOCAL_ZONE).strftime("%Y-%m-%d %H:%M:%S UTC+8")
 
 
-def _history_kind_label(kind: str) -> str:
+def _history_category_label(kind: str) -> str:
     return {
-        "intent": "重置意图",
-        "scheduled": "时间安排",
-        "completed": "操作确认",
+        "special_global": "全局特殊重置",
+        "banked": "Banked 重置",
         "policy_change": "额度政策",
     }.get(kind, kind)
+
+
+def _history_phase_label(phase: str) -> str:
+    return {
+        "official_intent": "官方意图",
+        "action_in_progress": "执行中",
+        "action_claimed": "已确认执行",
+    }.get(phase, phase)
 
 
 def _status_label(status: str) -> str:
@@ -256,6 +265,16 @@ def _status_label(status: str) -> str:
         "superseded": "已取代",
         "expired": "已过期",
     }.get(status, status)
+
+
+def _scope_label(scope: str) -> str:
+    return {
+        "all": "全部用户",
+        "model": "指定模型",
+        "plus": "Plus",
+        "plus_pro": "Plus / Pro",
+        "unknown": "未知",
+    }.get(scope, scope)
 
 
 def _alert_topic_label(topic: str) -> str:
