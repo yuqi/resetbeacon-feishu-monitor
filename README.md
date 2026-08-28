@@ -1,13 +1,13 @@
 # Reset Beacon → 飞书
 
-一个轻量、可重复执行的监控器，每五分钟读取 Reset Beacon 的 History、Alerts 和 Health，并把新的重置事件、概率预警及数据源状态转换发送到飞书群。
+一个轻量、可重复执行的监控器，每五分钟读取 Reset Beacon 的 History、Alerts 和 Health，并把新的重置事件、概率预警及接口故障发送到飞书群。
 
 ## 行为
 
 - History 是主数据源：转发 `intent`、`scheduled`、`completed`、`policy_change` 及后续修正。
 - Alerts 补充 History 没有覆盖的通知，尤其是没有 `postId` 的概率预警。
 - Alert 的 `postId` 已存在于 History 时自动抑制，避免同一帖子发两遍。
-- Health 首次只建立基线，之后仅在状态或原因变化时通知。
+- Health 的上游内部 `degraded`/`recovered` 状态不推送；接口连续失败三次及恢复仍会通知。
 - 首次真实运行不补发历史，只发送一条“Codex 重置监控已启动”。
 - SQLite 保存当前状态和待投递消息；飞书确认业务成功后才标记 delivered。
 - 任一 Reset Beacon 端点失败不会阻塞其他端点；连续三次失败时告警，恢复时通知。

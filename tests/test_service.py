@@ -55,7 +55,7 @@ def test_first_run_baselines_and_only_sends_startup(tmp_path: Path) -> None:
     sender = FakeSender()
     with StateDB(tmp_path / "state.sqlite3") as db:
         summary = MonitorService(db, api, sender).run_once()
-        assert summary.baselined == {"history": 1, "alerts": 2, "health": 1}
+        assert summary.baselined == {"history": 1, "alerts": 2}
         assert summary.delivered == 1
         assert len(sender.messages) == 1
         assert "Codex 重置监控已启动" in sender.messages[0]["card"]["header"]["title"]["content"]
@@ -123,7 +123,7 @@ def test_history_change_is_delivered_once(tmp_path: Path) -> None:
         assert second.delivered == 0
 
 
-def test_health_transition_is_delivered_once(tmp_path: Path) -> None:
+def test_upstream_health_transitions_are_not_delivered(tmp_path: Path) -> None:
     api = FakeAPI()
     sender = FakeSender()
     with StateDB(tmp_path / "state.sqlite3") as db:
@@ -136,10 +136,51 @@ def test_health_transition_is_delivered_once(tmp_path: Path) -> None:
         }
 
         degraded = MonitorService(db, api, sender).run_once()
-        repeated = MonitorService(db, api, sender).run_once()
-        assert degraded.delivered == 1
-        assert repeated.delivered == 0
-        assert "数据源异常" in sender.messages[0]["card"]["header"]["title"]["content"]
+        assert degraded.delivered == 0
+        assert sender.messages == []
+
+        api.health = fixture("health.json")
+        recovered = MonitorService(db, api, sender).run_once()
+        assert recovered.delivered == 0
+        assert sender.messages == []
+
+
+def test_pending_upstream_health_delivery_is_suppressed(tmp_path: Path) -> None:
+    api = FakeAPI()
+    sender = FakeSender()
+    with StateDB(tmp_path / "state.sqlite3") as db:
+        MonitorService(db, api, sender).run_once()
+        sender.messages.clear()
+        db.observe(
+            "health",
+            "service-health",
+            {"status": "degraded", "reasons": ["collect_stale"]},
+            notify=True,
+        )
+
+        summary = MonitorService(db, api, sender).run_once()
+
+        assert summary.delivered == 0
+        assert summary.suppressed == 1
+        assert summary.pending == 0
+        assert sender.messages == []
+
+
+def test_health_endpoint_outage_and_recovery_are_still_delivered(tmp_path: Path) -> None:
+    api = FakeAPI()
+    sender = FakeSender()
+    with StateDB(tmp_path / "state.sqlite3") as db:
+        MonitorService(db, api, sender).run_once()
+        sender.messages.clear()
+        api.health = RuntimeError("health unavailable")
+
+        first = MonitorService(db, api, sender).run_once()
+        second = MonitorService(db, api, sender).run_once()
+        third = MonitorService(db, api, sender).run_once()
+        assert first.delivered == 0
+        assert second.delivered == 0
+        assert third.delivered == 1
+        assert "数据源异常" in sender.messages[-1]["card"]["header"]["title"]["content"]
 
         api.health = fixture("health.json")
         recovered = MonitorService(db, api, sender).run_once()
@@ -193,7 +234,7 @@ def test_dry_run_does_not_initialize_or_send(tmp_path: Path) -> None:
         assert not db.is_initialized("alerts")
         assert db.stats()["items"] == 0
         assert sender.messages == []
-        assert summary.baselined == {"history": 1, "alerts": 2, "health": 1}
+        assert summary.baselined == {"history": 1, "alerts": 2}
         assert len(summary.previews) == 1
 
 

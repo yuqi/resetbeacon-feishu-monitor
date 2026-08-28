@@ -43,7 +43,7 @@ class MonitorService:
         summary = RunSummary(dry_run=dry_run)
         history = self._fetch("history", self.api.fetch_history, summary, dry_run)
         alerts = self._fetch("alerts", self.api.fetch_alerts, summary, dry_run)
-        health = self._fetch("health", self.api.fetch_health, summary, dry_run)
+        self._fetch("health", self.api.fetch_health, summary, dry_run)
 
         history_ids = {
             str(item.get("id")) for item in (history or []) if item.get("id") is not None
@@ -52,8 +52,6 @@ class MonitorService:
             self._ingest_history(history, summary, dry_run)
         if alerts is not None:
             self._ingest_alerts(alerts, history_ids, summary, dry_run)
-        if health is not None:
-            self._ingest_health(health, summary, dry_run)
 
         if not dry_run:
             self._queue_startup_if_ready(history, alerts)
@@ -195,36 +193,6 @@ class MonitorService:
         if baselined:
             summary.baselined["alerts"] = baselined
 
-    def _ingest_health(
-        self,
-        health: dict[str, Any],
-        summary: RunSummary,
-        dry_run: bool,
-    ) -> None:
-        payload = {
-            "status": health.get("status"),
-            "reasons": health.get("reasons") or [],
-        }
-        initialized = self.db.is_initialized("service-health")
-        state = self.db.detect("health", "service-health", payload)
-        if dry_run:
-            if not initialized:
-                summary.baselined["health"] = 1
-            elif state != "same":
-                summary.previews.append(render_message("health", payload))
-            return
-        result = self.db.observe(
-            "health",
-            "service-health",
-            payload,
-            notify=initialized,
-        )
-        if initialized and result != "same":
-            summary.queued += 1
-        if not initialized:
-            self.db.mark_initialized("service-health")
-            summary.baselined["health"] = 1
-
     def _queue_startup_if_ready(
         self,
         history: list[dict[str, Any]] | None,
@@ -242,7 +210,7 @@ class MonitorService:
             "lines": [
                 f"History 基线：{len(history or [])} 条",
                 f"Alerts 基线：{len(alerts or [])} 条",
-                "后续只发送新事件、实质更新和健康状态转换。",
+                "后续只发送新事件、实质更新和接口故障。",
             ],
         }
         self.db.observe("system", "startup:v1", payload, notify=True)
@@ -266,7 +234,7 @@ class MonitorService:
                     "lines": [
                         f"History 基线：{len(history)} 条",
                         f"Alerts 基线：{len(alerts)} 条",
-                        "后续只发送新事件、实质更新和健康状态转换。",
+                        "后续只发送新事件、实质更新和接口故障。",
                     ],
                 },
             )
@@ -277,6 +245,10 @@ class MonitorService:
             summary.errors.append("delivery: sender is not configured")
             return
         for delivery in self.db.pending_deliveries():
+            if delivery.source == "health" and delivery.item_id == "service-health":
+                self.db.mark_delivered(delivery.id)
+                summary.suppressed += 1
+                continue
             try:
                 self.sender.send(render_message(delivery.source, delivery.payload))
                 self.db.mark_delivered(delivery.id)
