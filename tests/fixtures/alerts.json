@@ -1,0 +1,33 @@
+{
+  "items": [
+    {
+      "id": "event:likely:2092862554632826968:rev1",
+      "eventId": "event",
+      "postId": "2092862554632826968",
+      "topic": "likely",
+      "state": "likely_official_intent",
+      "revision": "rev1",
+      "title": "Codex reset looks likely",
+      "summary": "An official lead-up post says a reset is coming.",
+      "sourceUrl": "https://x.com/thsottiaux/status/2092862554632826968",
+      "evidenceId": "9bb2a02f-ea49-451e-bbac-73abd1bf20e9",
+      "sourcePublishedAt": "2026-08-27T06:31:31.187Z",
+      "publishedAt": "2026-08-27T09:15:05.595Z"
+    },
+    {
+      "id": "event:likely:forecast:rev1",
+      "eventId": "event",
+      "postId": null,
+      "topic": "likely",
+      "state": "likely_forecast",
+      "revision": "rev1",
+      "title": "The odds reached 58% by tomorrow.",
+      "summary": "The odds reached 58% by tomorrow. This is a forecast, not an OpenAI announcement.",
+      "sourceUrl": "https://resetbeacon.com/accuracy/",
+      "evidenceId": null,
+      "sourcePublishedAt": null,
+      "publishedAt": "2026-08-27T10:15:05.609Z"
+    }
+  ]
+}
+

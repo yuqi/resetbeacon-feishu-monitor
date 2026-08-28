@@ -1,0 +1,13 @@
+[Unit]
+Description=Poll Reset Beacon every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=15s
+Persistent=true
+Unit=resetbeacon-feishu-monitor.service
+
+[Install]
+WantedBy=timers.target
+

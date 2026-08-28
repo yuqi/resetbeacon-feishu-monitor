@@ -1,0 +1,18 @@
+[Unit]
+Description=Reset Beacon to Feishu monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=resetbeacon
+Group=resetbeacon
+WorkingDirectory=/opt/resetbeacon-feishu-monitor
+EnvironmentFile=/etc/resetbeacon-feishu-monitor.env
+ExecStart=/opt/resetbeacon-feishu-monitor/.venv/bin/python -m monitor run-once
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/resetbeacon-feishu-monitor/data
+
