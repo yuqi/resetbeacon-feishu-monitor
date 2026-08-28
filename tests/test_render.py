@@ -21,7 +21,7 @@ def test_history_uses_structured_fields_and_separate_actions() -> None:
     message = render_message("history", history_payload(item))
 
     card = message["card"]
-    assert card["header"]["title"]["content"] == "intent"
+    assert card["header"]["title"]["content"] == "Codex Reset · intent"
     assert card["elements"][0]["text"]["content"] == item["summaryFull"]
     assert card["elements"][1] == {"tag": "hr"}
     assert [field["text"]["content"] for field in card["elements"][2]["fields"]] == [

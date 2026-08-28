@@ -89,7 +89,7 @@ def test_new_history_wins_over_alert_with_same_post(tmp_path: Path) -> None:
         summary = MonitorService(db, api, sender).run_once()
         assert summary.delivered == 1
         assert summary.suppressed == 1
-        assert sender.messages[0]["card"]["header"]["title"]["content"] == "completed"
+        assert sender.messages[0]["card"]["header"]["title"]["content"] == "Codex Reset · completed"
 
 
 def test_forecast_only_alert_is_delivered(tmp_path: Path) -> None:

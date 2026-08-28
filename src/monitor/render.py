@@ -36,7 +36,7 @@ def _history_card(item: dict[str, Any]) -> dict[str, Any]:
     if isinstance(corrections, list) and corrections:
         details.append(f"修正：{len(corrections)} 条")
     return _event_card(
-        title=event_kind,
+        title=f"Codex Reset · {event_kind}",
         template=templates.get(event_kind, "blue"),
         summary=_truncate(str(summary or "（无摘要）")),
         fields=[
