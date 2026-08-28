@@ -103,8 +103,10 @@ def test_forecast_only_alert_is_delivered(tmp_path: Path) -> None:
 
         summary = MonitorService(db, api, sender).run_once()
         assert summary.delivered == 1
-        body = sender.messages[0]["card"]["elements"][0]["text"]["content"]
-        assert "模型概率预警" in body
+        card = sender.messages[0]["card"]
+        assert "重置概率预警" in card["header"]["title"]["content"]
+        note = card["elements"][3]["elements"][0]["content"]
+        assert "模型预测，不是 OpenAI 官方承诺" in note
 
 
 def test_history_change_is_delivered_once(tmp_path: Path) -> None:
