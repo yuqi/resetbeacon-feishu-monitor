@@ -23,28 +23,27 @@ def render_message(source: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _history_card(item: dict[str, Any]) -> dict[str, Any]:
-    kind = str(item.get("eventKind") or "unknown")
-    labels = {
-        "intent": ("⚠️ Codex 重置意图", "orange"),
-        "scheduled": ("🗓️ Codex 重置已安排", "blue"),
-        "completed": ("✅ Codex 重置已确认", "green"),
-        "policy_change": ("📋 Codex 额度政策变化", "purple"),
+    event_kind = str(item.get("eventKind") or "unknown")
+    templates = {
+        "intent": "orange",
+        "scheduled": "blue",
+        "completed": "green",
+        "policy_change": "purple",
     }
-    title, template = labels.get(kind, ("Codex 重置事件", "blue"))
     summary = item.get("summaryFull") or item.get("summary") or item.get("operativeSentence")
     details: list[str] = []
     corrections = item.get("corrections")
     if isinstance(corrections, list) and corrections:
         details.append(f"修正：{len(corrections)} 条")
     return _event_card(
-        title=title,
-        template=template,
+        title=event_kind,
+        template=templates.get(event_kind, "blue"),
         summary=_truncate(str(summary or "（无摘要）")),
         fields=[
-            ("类别", _history_category_label(str(item.get("kind") or "unknown"))),
-            ("阶段", _history_phase_label(str(item.get("phase") or "unknown"))),
-            ("状态", _status_label(str(item.get("status") or "unknown"))),
-            ("范围", _scope_label(str(item.get("scope") or "unknown"))),
+            ("类别", str(item.get("kind") or "unknown")),
+            ("阶段", str(item.get("phase") or "unknown")),
+            ("状态", str(item.get("status") or "unknown")),
+            ("范围", str(item.get("scope") or "unknown")),
         ],
         published_at=item.get("announcedAt"),
         details=details,
@@ -54,23 +53,22 @@ def _history_card(item: dict[str, Any]) -> dict[str, Any]:
 
 def _alert_card(item: dict[str, Any]) -> dict[str, Any]:
     topic = str(item.get("topic") or "alert")
-    labels = {
-        "likely": ("⚠️ Codex 重置概率预警", "orange"),
-        "schedule": ("🗓️ Codex 重置已安排", "blue"),
-        "action": ("✅ Codex 重置已确认", "green"),
-        "correction": ("❌ Codex 重置信息修正", "red"),
+    templates = {
+        "likely": "orange",
+        "schedule": "blue",
+        "action": "green",
+        "correction": "red",
     }
-    title, template = labels.get(topic, ("Codex 重置提醒", "orange"))
     details: list[str] = []
     if not item.get("postId"):
         details.append("⚠️ 模型预测，不是 OpenAI 官方承诺")
     return _event_card(
-        title=title,
-        template=template,
+        title=str(item.get("title") or topic),
+        template=templates.get(topic, "orange"),
         summary=_alert_summary(item),
         fields=[
-            ("类型", _alert_topic_label(topic)),
-            ("状态", _alert_state_label(str(item.get("state") or "unknown"))),
+            ("类型", topic),
+            ("状态", str(item.get("state") or "unknown")),
         ],
         published_at=item.get("publishedAt"),
         details=details,
@@ -238,62 +236,6 @@ def format_local_time(value: Any) -> str:
     except ValueError:
         return value
     return instant.astimezone(LOCAL_ZONE).strftime("%Y-%m-%d %H:%M:%S UTC+8")
-
-
-def _history_category_label(kind: str) -> str:
-    return {
-        "special_global": "全局特殊重置",
-        "banked": "Banked 重置",
-        "policy_change": "额度政策",
-    }.get(kind, kind)
-
-
-def _history_phase_label(phase: str) -> str:
-    return {
-        "official_intent": "官方意图",
-        "action_in_progress": "执行中",
-        "action_claimed": "已确认执行",
-    }.get(phase, phase)
-
-
-def _status_label(status: str) -> str:
-    return {
-        "active": "生效中",
-        "scheduled": "已安排",
-        "completed": "已确认",
-        "recorded": "已记录",
-        "superseded": "已取代",
-        "expired": "已过期",
-    }.get(status, status)
-
-
-def _scope_label(scope: str) -> str:
-    return {
-        "all": "全部用户",
-        "model": "指定模型",
-        "plus": "Plus",
-        "plus_pro": "Plus / Pro",
-        "unknown": "未知",
-    }.get(scope, scope)
-
-
-def _alert_topic_label(topic: str) -> str:
-    return {
-        "likely": "概率预警",
-        "schedule": "时间安排",
-        "action": "操作确认",
-        "correction": "信息修正",
-    }.get(topic, topic)
-
-
-def _alert_state_label(state: str) -> str:
-    return {
-        "likely_forecast": "模型预测",
-        "likely_official_intent": "官方意图",
-        "schedule_claimed": "已安排",
-        "action_claimed": "已确认",
-        "correction_issued": "已修正",
-    }.get(state, state)
 
 
 def _alert_summary(item: dict[str, Any]) -> str:

@@ -89,7 +89,7 @@ def test_new_history_wins_over_alert_with_same_post(tmp_path: Path) -> None:
         summary = MonitorService(db, api, sender).run_once()
         assert summary.delivered == 1
         assert summary.suppressed == 1
-        assert "Codex 重置已确认" in sender.messages[0]["card"]["header"]["title"]["content"]
+        assert sender.messages[0]["card"]["header"]["title"]["content"] == "completed"
 
 
 def test_forecast_only_alert_is_delivered(tmp_path: Path) -> None:
@@ -104,7 +104,7 @@ def test_forecast_only_alert_is_delivered(tmp_path: Path) -> None:
         summary = MonitorService(db, api, sender).run_once()
         assert summary.delivered == 1
         card = sender.messages[0]["card"]
-        assert "重置概率预警" in card["header"]["title"]["content"]
+        assert card["header"]["title"]["content"] == "The odds reached 58% by tomorrow."
         note = card["elements"][3]["elements"][0]["content"]
         assert "模型预测，不是 OpenAI 官方承诺" in note
 

@@ -21,14 +21,14 @@ def test_history_uses_structured_fields_and_separate_actions() -> None:
     message = render_message("history", history_payload(item))
 
     card = message["card"]
-    assert card["header"]["title"]["content"] == "⚠️ Codex 重置意图"
+    assert card["header"]["title"]["content"] == "intent"
     assert card["elements"][0]["text"]["content"] == item["summaryFull"]
     assert card["elements"][1] == {"tag": "hr"}
     assert [field["text"]["content"] for field in card["elements"][2]["fields"]] == [
-        "**类别**\n全局特殊重置",
-        "**阶段**\n官方意图",
-        "**状态**\n生效中",
-        "**范围**\n全部用户",
+        "**类别**\nspecial_global",
+        "**阶段**\nofficial_intent",
+        "**状态**\nactive",
+        "**范围**\nall",
     ]
     note = card["elements"][3]["elements"][0]["content"]
     assert note == "🕒 2026-08-27 14:31:31 UTC+8"
@@ -57,11 +57,11 @@ def test_forecast_alert_has_human_labels_and_warning() -> None:
     message = render_message("alerts", alert_payload(item))
 
     card = message["card"]
-    assert card["header"]["title"]["content"] == "⚠️ Codex 重置概率预警"
+    assert card["header"]["title"]["content"] == "The odds reached 58% by tomorrow."
     assert card["elements"][0]["text"]["content"] == "The odds reached 58% by tomorrow."
     assert [field["text"]["content"] for field in card["elements"][2]["fields"]] == [
-        "**类型**\n概率预警",
-        "**状态**\n模型预测",
+        "**类型**\nlikely",
+        "**状态**\nlikely_forecast",
     ]
     note = card["elements"][3]["elements"][0]["content"]
     assert note == "⚠️ 模型预测，不是 OpenAI 官方承诺  ·  🕒 2026-08-27 18:15:05 UTC+8"
