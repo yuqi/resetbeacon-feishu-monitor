@@ -83,11 +83,6 @@ class StateDB:
             CREATE INDEX IF NOT EXISTS deliveries_pending_idx
                 ON deliveries(status, id);
 
-            CREATE TABLE IF NOT EXISTS delivered_posts (
-                post_id TEXT PRIMARY KEY,
-                delivered_at TEXT NOT NULL
-            );
-
             CREATE TABLE IF NOT EXISTS source_state (
                 source TEXT PRIMARY KEY,
                 consecutive_failures INTEGER NOT NULL DEFAULT 0,
@@ -212,22 +207,6 @@ class StateDB:
         )
         self.connection.commit()
 
-    def mark_post_delivered(self, post_id: str) -> None:
-        self.connection.execute(
-            "INSERT OR IGNORE INTO delivered_posts(post_id, delivered_at) VALUES (?, ?)",
-            (post_id, utc_now()),
-        )
-        self.connection.commit()
-
-    def was_post_delivered(self, post_id: str) -> bool:
-        return (
-            self.connection.execute(
-                "SELECT 1 FROM delivered_posts WHERE post_id = ?",
-                (post_id,),
-            ).fetchone()
-            is not None
-        )
-
     def record_source_success(self, source: str) -> int | None:
         row = self.connection.execute(
             "SELECT outage_number, outage_alerted FROM source_state WHERE source = ?",
@@ -292,8 +271,5 @@ class StateDB:
             ).fetchone()[0],
             "delivered": self.connection.execute(
                 "SELECT COUNT(*) FROM deliveries WHERE status = 'delivered'"
-            ).fetchone()[0],
-            "deliveredPosts": self.connection.execute(
-                "SELECT COUNT(*) FROM delivered_posts"
             ).fetchone()[0],
         }

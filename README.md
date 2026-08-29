@@ -4,9 +4,9 @@
 
 ## 行为
 
-- History 是主数据源：转发 `intent`、`scheduled`、`completed`、`policy_change` 及后续修正。
-- Alerts 补充 History 没有覆盖的通知，尤其是没有 `postId` 的概率预警。
-- Alert 的 `postId` 已存在于 History 时自动抑制，避免同一帖子发两遍。
+- History 转发 `intent`、`scheduled`、`completed`、`policy_change` 及后续修正。
+- Alerts 独立转发已发布的通知，包括没有 `postId` 的概率预警。
+- History 和 Alert 即使引用同一帖子也分别发送，因为两者的发布时间与语义不同。
 - Health 的上游内部 `degraded`/`recovered` 状态不推送；接口连续失败三次及恢复仍会通知。
 - 首次真实运行不补发历史，只发送一条“Codex 重置监控已启动”。
 - SQLite 保存当前状态和待投递消息；飞书确认业务成功后才标记 delivered。
@@ -67,15 +67,11 @@ uv run python -m monitor health
 
 退出码：`0` 成功，`1` 本轮存在源或投递错误，`2` 配置错误，`3` 已有实例运行。
 
-## 去重与合并
+## 去重与投递
 
 History 使用 `item.id`，Alerts 使用 `alert.id` 保存当前 payload hash。同一 ID 的状态、修正或正文发生实质变化时会形成一条新投递。
 
-跨接口合并规则：
-
-1. Alert 有 `postId`，且 History 当前或历史中存在相同 ID：保存 Alert，但不再次发送。
-2. Alert 没有 `postId`：作为独立概率预警发送，并明确说明不是 OpenAI 官方承诺。
-3. 新 History item 始终优先，消息使用它的事件类型与官方来源链接。
+History 和 Alerts 分别去重，不按 `postId` 跨接口合并。同一帖子先进入 History、后形成 Alert 时会收到两条消息；没有 `postId` 的概率 Alert 也会独立发送，并明确说明不是 OpenAI 官方承诺。
 
 整体投递语义为 at-least-once：投递成功响应丢失时极端情况下可能重复一条，但已抓到且尚未成功投递的消息不会因重启丢失。
 

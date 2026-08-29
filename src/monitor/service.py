@@ -45,13 +45,10 @@ class MonitorService:
         alerts = self._fetch("alerts", self.api.fetch_alerts, summary, dry_run)
         self._fetch("health", self.api.fetch_health, summary, dry_run)
 
-        history_ids = {
-            str(item.get("id")) for item in (history or []) if item.get("id") is not None
-        }
         if history is not None:
             self._ingest_history(history, summary, dry_run)
         if alerts is not None:
-            self._ingest_alerts(alerts, history_ids, summary, dry_run)
+            self._ingest_alerts(alerts, summary, dry_run)
 
         if not dry_run:
             self._queue_startup_if_ready(history, alerts)
@@ -123,22 +120,17 @@ class MonitorService:
                 continue
             payload = history_payload(item)
             state = self.db.detect("history", item_id, payload)
-            previously_delivered_by_alert = state == "new" and self.db.was_post_delivered(item_id)
             if dry_run:
                 if not initialized:
                     baselined += state != "same"
-                elif state != "same" and not previously_delivered_by_alert:
+                elif state != "same":
                     summary.previews.append(render_message("history", payload))
-                elif state != "same" and previously_delivered_by_alert:
-                    summary.suppressed += 1
                 continue
-            notify = initialized and not previously_delivered_by_alert
+            notify = initialized
             result = self.db.observe("history", item_id, payload, notify=notify)
             if result != "same":
                 if notify:
                     summary.queued += 1
-                elif previously_delivered_by_alert and initialized:
-                    summary.suppressed += 1
                 else:
                     baselined += 1
         if not dry_run and not initialized:
@@ -149,7 +141,6 @@ class MonitorService:
     def _ingest_alerts(
         self,
         items: list[dict[str, Any]],
-        current_history_ids: set[str],
         summary: RunSummary,
         dry_run: bool,
     ) -> None:
@@ -162,30 +153,17 @@ class MonitorService:
                 continue
             payload = alert_payload(item)
             state = self.db.detect("alerts", item_id, payload)
-            post_id = str(item.get("postId")) if item.get("postId") is not None else None
-            duplicate = bool(
-                post_id
-                and (
-                    post_id in current_history_ids
-                    or self.db.has_item("history", post_id)
-                    or self.db.was_post_delivered(post_id)
-                )
-            )
             if dry_run:
                 if not initialized:
                     baselined += state != "same"
-                elif state != "same" and not duplicate:
+                elif state != "same":
                     summary.previews.append(render_message("alerts", payload))
-                elif state != "same" and duplicate:
-                    summary.suppressed += 1
                 continue
-            notify = initialized and not duplicate
+            notify = initialized
             result = self.db.observe("alerts", item_id, payload, notify=notify)
             if result != "same":
                 if notify:
                     summary.queued += 1
-                elif duplicate and initialized:
-                    summary.suppressed += 1
                 else:
                     baselined += 1
         if not dry_run and not initialized:
@@ -252,9 +230,6 @@ class MonitorService:
             try:
                 self.sender.send(render_message(delivery.source, delivery.payload))
                 self.db.mark_delivered(delivery.id)
-                post_id = _delivery_post_id(delivery.source, delivery.payload)
-                if post_id:
-                    self.db.mark_post_delivered(post_id)
                 summary.delivered += 1
             except Exception as exc:
                 self.db.mark_failed(delivery.id, str(exc))
@@ -311,11 +286,3 @@ def alert_payload(item: dict[str, Any]) -> dict[str, Any]:
         "publishedAt",
     )
     return {field: item.get(field) for field in fields}
-
-
-def _delivery_post_id(source: str, payload: dict[str, Any]) -> str | None:
-    if source == "history" and payload.get("id") is not None:
-        return str(payload["id"])
-    if source == "alerts" and payload.get("postId") is not None:
-        return str(payload["postId"])
-    return None

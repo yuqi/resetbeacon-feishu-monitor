@@ -65,7 +65,7 @@ def test_first_run_baselines_and_only_sends_startup(tmp_path: Path) -> None:
         assert len(sender.messages) == 1
 
 
-def test_new_history_wins_over_alert_with_same_post(tmp_path: Path) -> None:
+def test_history_and_alert_with_same_post_are_both_delivered(tmp_path: Path) -> None:
     api = FakeAPI()
     sender = FakeSender()
     with StateDB(tmp_path / "state.sqlite3") as db:
@@ -80,16 +80,17 @@ def test_new_history_wins_over_alert_with_same_post(tmp_path: Path) -> None:
         new_item["sources"][0]["url"] = "https://x.com/thsottiaux/status/2093014447833116908"
         api.history.append(new_item)
 
-        duplicate_alert = copy.deepcopy(api.alerts[0])
-        duplicate_alert["id"] = "event:action:2093014447833116908:rev1"
-        duplicate_alert["postId"] = "2093014447833116908"
-        duplicate_alert["topic"] = "action"
-        api.alerts.append(duplicate_alert)
+        matching_alert = copy.deepcopy(api.alerts[0])
+        matching_alert["id"] = "event:action:2093014447833116908:rev1"
+        matching_alert["postId"] = "2093014447833116908"
+        matching_alert["topic"] = "action"
+        api.alerts.append(matching_alert)
 
         summary = MonitorService(db, api, sender).run_once()
-        assert summary.delivered == 1
-        assert summary.suppressed == 1
+        assert summary.delivered == 2
+        assert summary.suppressed == 0
         assert sender.messages[0]["card"]["header"]["title"]["content"] == "Codex Reset · completed"
+        assert sender.messages[1]["card"]["header"]["title"]["content"] == "Codex reset looks likely"
 
 
 def test_forecast_only_alert_is_delivered(tmp_path: Path) -> None:
@@ -238,7 +239,7 @@ def test_dry_run_does_not_initialize_or_send(tmp_path: Path) -> None:
         assert len(summary.previews) == 1
 
 
-def test_alert_sent_during_history_outage_suppresses_late_history(tmp_path: Path) -> None:
+def test_alert_sent_during_history_outage_does_not_suppress_late_history(tmp_path: Path) -> None:
     api = FakeAPI()
     sender = FakeSender()
     with StateDB(tmp_path / "state.sqlite3") as db:
@@ -265,5 +266,6 @@ def test_alert_sent_during_history_outage_suppresses_late_history(tmp_path: Path
         api.history = [*fixture("history.json")["items"], late_history]
 
         history_run = MonitorService(db, api, sender).run_once()
-        assert history_run.delivered == 0
-        assert history_run.suppressed == 1
+        assert history_run.delivered == 1
+        assert history_run.suppressed == 0
+        assert len(sender.messages) == 2
