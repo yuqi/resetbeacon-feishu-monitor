@@ -69,9 +69,9 @@ uv run python -m monitor health
 
 ## 去重与投递
 
-History 使用 `item.id`，Alerts 使用 `alert.id` 保存当前 payload hash。同一 ID 的状态、修正或正文发生实质变化时会形成一条新投递。
+History 使用 `item.id` 作为 Post ID；Alerts 优先使用 `postId`，没有 `postId` 时退回使用 `alert.id`。每个 Post 在 History、Alerts 内分别最多形成一条投递，后续状态、修正或正文变化只更新 SQLite 中保存的当前 payload，不再重复通知。
 
-History 和 Alerts 分别去重，不按 `postId` 跨接口合并。同一帖子先进入 History、后形成 Alert 时会收到两条消息；没有 `postId` 的概率 Alert 也会独立发送，并明确说明不是 OpenAI 官方承诺。
+History 和 Alerts 独立去重，不跨接口合并。同一帖子先进入 History、后形成 Alert 时仍会收到两条消息；没有 `postId` 的概率 Alert 也会独立发送，并明确说明不是 OpenAI 官方承诺。
 
 整体投递语义为 at-least-once：投递成功响应丢失时极端情况下可能重复一条，但已抓到且尚未成功投递的消息不会因重启丢失。
 

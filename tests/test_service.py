@@ -110,7 +110,7 @@ def test_forecast_only_alert_is_delivered(tmp_path: Path) -> None:
         assert "模型预测，不是 OpenAI 官方承诺" in note
 
 
-def test_history_change_is_delivered_once(tmp_path: Path) -> None:
+def test_history_change_for_seen_post_is_not_delivered_again(tmp_path: Path) -> None:
     api = FakeAPI()
     sender = FakeSender()
     with StateDB(tmp_path / "state.sqlite3") as db:
@@ -120,8 +120,27 @@ def test_history_change_is_delivered_once(tmp_path: Path) -> None:
 
         first = MonitorService(db, api, sender).run_once()
         second = MonitorService(db, api, sender).run_once()
-        assert first.delivered == 1
+        assert first.delivered == 0
         assert second.delivered == 0
+        assert sender.messages == []
+
+
+def test_new_alert_revision_for_seen_post_is_not_delivered_again(tmp_path: Path) -> None:
+    api = FakeAPI()
+    sender = FakeSender()
+    with StateDB(tmp_path / "state.sqlite3") as db:
+        MonitorService(db, api, sender).run_once()
+        sender.messages.clear()
+        revised = copy.deepcopy(api.alerts[0])
+        revised["id"] = "event:likely:2092862554632826968:rev2"
+        revised["revision"] = "rev2"
+        revised["summary"] = "Updated classification for the same post."
+        api.alerts.append(revised)
+
+        summary = MonitorService(db, api, sender).run_once()
+
+        assert summary.delivered == 0
+        assert sender.messages == []
 
 
 def test_upstream_health_transitions_are_not_delivered(tmp_path: Path) -> None:
@@ -194,7 +213,11 @@ def test_failed_delivery_remains_pending_and_retries(tmp_path: Path) -> None:
     sender = FakeSender()
     with StateDB(tmp_path / "state.sqlite3") as db:
         MonitorService(db, api, sender).run_once()
-        api.history[0]["status"] = "expired"
+        new_item = copy.deepcopy(api.history[0])
+        new_item["id"] = "2093999999999999998"
+        new_item["sources"][0]["announcementId"] = new_item["id"]
+        new_item["sources"][0]["url"] = f"https://x.com/thsottiaux/status/{new_item['id']}"
+        api.history.append(new_item)
         failing = FakeSender(fail_count=1)
 
         failed = MonitorService(db, api, failing).run_once()
@@ -204,6 +227,21 @@ def test_failed_delivery_remains_pending_and_retries(tmp_path: Path) -> None:
         recovered = MonitorService(db, api, sender).run_once()
         assert recovered.delivered == 1
         assert recovered.pending == 0
+
+
+def test_existing_items_seed_post_keys_during_migration(tmp_path: Path) -> None:
+    path = tmp_path / "state.sqlite3"
+    alert = fixture("alerts.json")["items"][0]
+    with StateDB(path) as db:
+        db.observe("alerts", alert["id"], alert, notify=False)
+        db.connection.execute("DELETE FROM notification_keys")
+        db.connection.execute(
+            "DELETE FROM metadata WHERE key = 'migration:notification-keys:v1'"
+        )
+        db.connection.commit()
+
+    with StateDB(path) as db:
+        assert db.has_notification_key("alerts", f"post:{alert['postId']}")
 
 
 def test_one_source_failure_does_not_block_another(tmp_path: Path) -> None:

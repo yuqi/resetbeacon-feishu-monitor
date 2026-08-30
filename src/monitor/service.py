@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Protocol
 
-from .db import StateDB
+from .db import StateDB, notification_key
 from .render import render_message
 
 
@@ -113,22 +113,30 @@ class MonitorService:
     ) -> None:
         initialized = self.db.is_initialized("history")
         baselined = 0
+        seen_in_run: set[str] = set()
         for item in sorted(items, key=lambda value: str(value.get("announcedAt") or "")):
             item_id = str(item.get("id") or "")
             if not item_id:
                 summary.errors.append("history: item without id")
                 continue
             payload = history_payload(item)
-            state = self.db.detect("history", item_id, payload)
+            key = notification_key("history", item_id, payload)
             if dry_run:
+                first_seen = (
+                    key not in seen_in_run
+                    and not self.db.has_notification_key("history", key)
+                )
+                seen_in_run.add(key)
                 if not initialized:
-                    baselined += state != "same"
-                elif state != "same":
+                    baselined += first_seen
+                elif first_seen:
                     summary.previews.append(render_message("history", payload))
                 continue
             notify = initialized
-            result = self.db.observe("history", item_id, payload, notify=notify)
-            if result != "same":
+            _, first_seen = self.db.observe_once(
+                "history", item_id, payload, key=key, notify=notify
+            )
+            if first_seen:
                 if notify:
                     summary.queued += 1
                 else:
@@ -146,22 +154,30 @@ class MonitorService:
     ) -> None:
         initialized = self.db.is_initialized("alerts")
         baselined = 0
+        seen_in_run: set[str] = set()
         for item in sorted(items, key=lambda value: str(value.get("publishedAt") or "")):
             item_id = str(item.get("id") or "")
             if not item_id:
                 summary.errors.append("alerts: item without id")
                 continue
             payload = alert_payload(item)
-            state = self.db.detect("alerts", item_id, payload)
+            key = notification_key("alerts", item_id, payload)
             if dry_run:
+                first_seen = (
+                    key not in seen_in_run
+                    and not self.db.has_notification_key("alerts", key)
+                )
+                seen_in_run.add(key)
                 if not initialized:
-                    baselined += state != "same"
-                elif state != "same":
+                    baselined += first_seen
+                elif first_seen:
                     summary.previews.append(render_message("alerts", payload))
                 continue
             notify = initialized
-            result = self.db.observe("alerts", item_id, payload, notify=notify)
-            if result != "same":
+            _, first_seen = self.db.observe_once(
+                "alerts", item_id, payload, key=key, notify=notify
+            )
+            if first_seen:
                 if notify:
                     summary.queued += 1
                 else:
@@ -188,7 +204,7 @@ class MonitorService:
             "lines": [
                 f"History 基线：{len(history or [])} 条",
                 f"Alerts 基线：{len(alerts or [])} 条",
-                "后续只发送新事件、实质更新和接口故障。",
+                "每个 Post 在 History、Alerts 内各发送一次；接口故障另行通知。",
             ],
         }
         self.db.observe("system", "startup:v1", payload, notify=True)
@@ -212,7 +228,7 @@ class MonitorService:
                     "lines": [
                         f"History 基线：{len(history)} 条",
                         f"Alerts 基线：{len(alerts)} 条",
-                        "后续只发送新事件、实质更新和接口故障。",
+                        "每个 Post 在 History、Alerts 内各发送一次；接口故障另行通知。",
                     ],
                 },
             )

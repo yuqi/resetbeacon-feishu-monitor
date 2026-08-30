@@ -21,6 +21,15 @@ def payload_hash(payload: dict[str, Any]) -> str:
     return hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
 
 
+def notification_key(source: str, item_id: str, payload: dict[str, Any]) -> str:
+    if source == "history":
+        return f"post:{payload.get('id') or item_id}"
+    if source == "alerts":
+        post_id = payload.get("postId")
+        return f"post:{post_id}" if post_id else f"alert:{item_id}"
+    return item_id
+
+
 @dataclass(frozen=True)
 class Delivery:
     id: int
@@ -83,6 +92,13 @@ class StateDB:
             CREATE INDEX IF NOT EXISTS deliveries_pending_idx
                 ON deliveries(status, id);
 
+            CREATE TABLE IF NOT EXISTS notification_keys (
+                source TEXT NOT NULL,
+                notification_key TEXT NOT NULL,
+                first_seen_at TEXT NOT NULL,
+                PRIMARY KEY (source, notification_key)
+            );
+
             CREATE TABLE IF NOT EXISTS source_state (
                 source TEXT PRIMARY KEY,
                 consecutive_failures INTEGER NOT NULL DEFAULT 0,
@@ -93,7 +109,40 @@ class StateDB:
             );
             """
         )
+        self._seed_notification_keys()
         self.connection.commit()
+
+    def _seed_notification_keys(self) -> None:
+        migration_key = "migration:notification-keys:v1"
+        migrated = self.connection.execute(
+            "SELECT 1 FROM metadata WHERE key = ?",
+            (migration_key,),
+        ).fetchone()
+        if migrated is not None:
+            return
+
+        rows = self.connection.execute(
+            """
+            SELECT source, item_id, payload_json, first_seen_at
+            FROM items
+            WHERE source IN ('history', 'alerts')
+            """
+        ).fetchall()
+        for row in rows:
+            payload = json.loads(row["payload_json"])
+            key = notification_key(row["source"], row["item_id"], payload)
+            self.connection.execute(
+                """
+                INSERT OR IGNORE INTO notification_keys(
+                    source, notification_key, first_seen_at
+                ) VALUES (?, ?, ?)
+                """,
+                (row["source"], key, row["first_seen_at"]),
+            )
+        self.connection.execute(
+            "INSERT INTO metadata(key, value) VALUES (?, '1')",
+            (migration_key,),
+        )
 
     def is_initialized(self, source: str) -> bool:
         row = self.connection.execute(
@@ -114,6 +163,18 @@ class StateDB:
             self.connection.execute(
                 "SELECT 1 FROM items WHERE source = ? AND item_id = ?",
                 (source, item_id),
+            ).fetchone()
+            is not None
+        )
+
+    def has_notification_key(self, source: str, key: str) -> bool:
+        return (
+            self.connection.execute(
+                """
+                SELECT 1 FROM notification_keys
+                WHERE source = ? AND notification_key = ?
+                """,
+                (source, key),
             ).fetchone()
             is not None
         )
@@ -164,6 +225,55 @@ class StateDB:
             )
         self.connection.commit()
         return state
+
+    def observe_once(
+        self,
+        source: str,
+        item_id: str,
+        payload: dict[str, Any],
+        *,
+        key: str,
+        notify: bool,
+    ) -> tuple[str, bool]:
+        state = self.detect(source, item_id, payload)
+        now = utc_now()
+        digest = payload_hash(payload)
+        serialized = canonical_json(payload)
+
+        if state != "same":
+            self.connection.execute(
+                """
+                INSERT INTO items(
+                    source, item_id, current_hash, payload_json, first_seen_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(source, item_id) DO UPDATE SET
+                    current_hash = excluded.current_hash,
+                    payload_json = excluded.payload_json,
+                    updated_at = excluded.updated_at
+                """,
+                (source, item_id, digest, serialized, now, now),
+            )
+
+        inserted = self.connection.execute(
+            """
+            INSERT OR IGNORE INTO notification_keys(
+                source, notification_key, first_seen_at
+            ) VALUES (?, ?, ?)
+            """,
+            (source, key, now),
+        ).rowcount
+        first_seen = inserted == 1
+        if notify and first_seen:
+            self.connection.execute(
+                """
+                INSERT INTO deliveries(
+                    source, item_id, payload_hash, payload_json, status, created_at
+                ) VALUES (?, ?, ?, ?, 'pending', ?)
+                """,
+                (source, item_id, digest, serialized, now),
+            )
+        self.connection.commit()
+        return state, first_seen
 
     def pending_deliveries(self) -> list[Delivery]:
         rows = self.connection.execute(
