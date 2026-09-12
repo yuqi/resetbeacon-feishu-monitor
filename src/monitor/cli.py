@@ -4,6 +4,7 @@ import argparse
 import json
 import logging
 import sys
+from contextlib import ExitStack
 
 from .api import ResetBeaconClient
 from .config import Config, ConfigError
@@ -11,6 +12,7 @@ from .db import StateDB
 from .feishu import FeishuSender
 from .locking import AlreadyRunningError, process_lock
 from .service import MonitorService
+from .translation import OpenAITranslator
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -57,13 +59,23 @@ def _run_once(config: Config, *, dry_run: bool) -> int:
                 summary = MonitorService(db, api, None).run_once(dry_run=True)
             else:
                 assert config.webhook_url is not None
-                with FeishuSender(
-                    config.webhook_url,
-                    signing_secret=config.signing_secret,
-                    timeout_seconds=config.timeout_seconds,
-                    max_retries=config.max_retries,
-                ) as sender:
-                    summary = MonitorService(db, api, sender).run_once()
+                with ExitStack() as stack:
+                    sender = stack.enter_context(FeishuSender(
+                        config.webhook_url,
+                        signing_secret=config.signing_secret,
+                        timeout_seconds=config.timeout_seconds,
+                        max_retries=config.max_retries,
+                    ))
+                    translator = None
+                    if config.translation_enabled:
+                        translator = stack.enter_context(OpenAITranslator(
+                            base_url=config.translation_base_url,
+                            api_key=config.translation_api_key,
+                            model=config.translation_model,
+                            timeout_seconds=config.translation_timeout_seconds,
+                            max_retries=config.translation_max_retries,
+                        ))
+                    summary = MonitorService(db, api, sender, translator).run_once()
     except AlreadyRunningError as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
         return 3
@@ -75,6 +87,7 @@ def _health(config: Config) -> int:
     result: dict[str, object] = {
         "webhookConfigured": bool(config.webhook_url),
         "signingConfigured": bool(config.signing_secret),
+        "translationConfigured": config.translation_enabled,
         "database": str(config.db_path.resolve()),
     }
     try:

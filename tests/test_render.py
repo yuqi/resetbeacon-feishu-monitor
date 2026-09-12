@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from monitor.render import render_message
+from monitor.render import message_body, render_message, render_translation
 from monitor.service import alert_payload, history_payload
 
 
@@ -13,6 +13,18 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 def fixture(name: str) -> dict[str, Any]:
     return json.loads((FIXTURES / name).read_text())
+
+
+def test_full_body_is_translated_before_card_truncation() -> None:
+    for source, payload in (
+        ("history", {"summaryFull": "English " * 1500}),
+        ("alerts", {"summary": "English " * 1500}),
+    ):
+        assert len(message_body(source, payload)) > 8000
+        original = render_message(source, payload)
+        translated = render_translation(source, payload, "中文" * 5000)
+        assert len(original["card"]["elements"][0]["text"]["content"]) <= 8000
+        assert len(translated["card"]["elements"][0]["text"]["content"]) <= 8000
 
 
 def test_history_uses_structured_fields_and_separate_actions() -> None:

@@ -22,6 +22,28 @@ def render_message(source: str, payload: dict[str, Any]) -> dict[str, Any]:
     raise ValueError(f"unsupported notification source: {source}")
 
 
+def message_body(source: str, payload: dict[str, Any]) -> str:
+    """Return the full event body before the card's display length limit."""
+    if source == "history":
+        return str(
+            payload.get("summaryFull") or payload.get("summary")
+            or payload.get("operativeSentence") or "（无摘要）"
+        )
+    if source == "alerts":
+        return _alert_summary(payload)
+    raise ValueError(f"unsupported translation source: {source}")
+
+
+def render_translation(source: str, payload: dict[str, Any], body: str) -> dict[str, Any]:
+    message = render_message(source, payload)
+    card = message["card"]
+    title = card["header"]["title"]["content"]
+    prefix = "中文译文" if "Codex" in title else "Codex · 中文译文"
+    card["header"]["title"]["content"] = f"{prefix} · {title}"
+    card["elements"][0]["text"]["content"] = _truncate(body)
+    return message
+
+
 def _history_card(item: dict[str, Any]) -> dict[str, Any]:
     event_kind = str(item.get("eventKind") or "unknown")
     templates = {
@@ -30,7 +52,6 @@ def _history_card(item: dict[str, Any]) -> dict[str, Any]:
         "completed": "green",
         "policy_change": "purple",
     }
-    summary = item.get("summaryFull") or item.get("summary") or item.get("operativeSentence")
     details: list[str] = []
     corrections = item.get("corrections")
     if isinstance(corrections, list) and corrections:
@@ -38,7 +59,7 @@ def _history_card(item: dict[str, Any]) -> dict[str, Any]:
     return _event_card(
         title=f"Codex Reset · {event_kind}",
         template=templates.get(event_kind, "blue"),
-        summary=_truncate(str(summary or "（无摘要）")),
+        summary=_truncate(message_body("history", item)),
         fields=[
             ("类别", str(item.get("kind") or "unknown")),
             ("阶段", str(item.get("phase") or "unknown")),
@@ -65,7 +86,7 @@ def _alert_card(item: dict[str, Any]) -> dict[str, Any]:
     return _event_card(
         title=str(item.get("title") or topic),
         template=templates.get(topic, "orange"),
-        summary=_alert_summary(item),
+        summary=_truncate(message_body("alerts", item)),
         fields=[
             ("类型", topic),
             ("状态", str(item.get("state") or "unknown")),
@@ -244,7 +265,7 @@ def _alert_summary(item: dict[str, Any]) -> str:
         suffix = " This is a forecast, not an OpenAI announcement."
         if summary.endswith(suffix):
             summary = summary[: -len(suffix)]
-    return _truncate(summary)
+    return summary
 
 
 def _history_actions(item: dict[str, Any]) -> list[tuple[str, str]]:

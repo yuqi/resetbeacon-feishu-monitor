@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import copy
 import json
+import sqlite3
 from pathlib import Path
 from typing import Any
 
 from monitor.db import StateDB
 from monitor.service import MonitorService
+from monitor.render import message_body, render_message
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -48,6 +50,188 @@ class FakeSender:
             self.fail_count -= 1
             raise RuntimeError("temporary delivery failure")
         self.messages.append(message)
+
+
+class FakeTranslator:
+    def __init__(self, fail: bool = False) -> None:
+        self.bodies: list[str] = []
+        self.fail = fail
+
+    def translate(self, body: str) -> str:
+        self.bodies.append(body)
+        if self.fail:
+            raise RuntimeError("temporary translation failure")
+        return "所有 Codex 用户的用量即将重置。"
+
+
+def queue_event(db: StateDB, api: FakeAPI, sender: FakeSender, source: str = "history") -> dict:
+    MonitorService(db, api, sender).run_once()
+    sender.messages.clear()
+    payload = copy.deepcopy(api.history[0] if source == "history" else api.alerts[1])
+    payload["id"] = "new-post"
+    db.observe_once(source, "new-post", payload, key="post:new-post", notify=True)
+    return payload
+
+
+def test_translation_follows_original_and_keeps_card_metadata(tmp_path: Path) -> None:
+    api, sender, translator = FakeAPI(), FakeSender(), FakeTranslator()
+    with StateDB(tmp_path / "state.sqlite3") as db:
+        payload = queue_event(db, api, sender)
+        summary = MonitorService(db, api, sender, translator).run_once()
+        assert summary.delivered == 1
+        assert summary.translation_delivered == 1
+        assert summary.translation_pending == 0
+        assert len(sender.messages) == 2
+        assert sender.messages[0] == render_message("history", payload)
+        original, translated = [message["card"] for message in sender.messages]
+        assert translated["elements"][0]["text"]["content"] == "所有 Codex 用户的用量即将重置。"
+        assert translated["elements"][1:] == original["elements"][1:]
+        assert "中文译文" in translated["header"]["title"]["content"]
+        assert translator.bodies == [message_body("history", payload)]
+        assert db.stats()["translation_delivered"] == 1
+        again = MonitorService(db, api, sender, translator).run_once()
+        assert again.delivered == again.translation_delivered == 0
+        assert len(translator.bodies) == 1
+
+
+def test_translation_failure_retries_after_restart_without_resending_original(tmp_path: Path) -> None:
+    api, sender = FakeAPI(), FakeSender()
+    path = tmp_path / "state.sqlite3"
+    with StateDB(path) as db:
+        queue_event(db, api, sender)
+        failed = MonitorService(db, api, sender, FakeTranslator(fail=True)).run_once()
+        assert failed.delivered == 1
+        assert failed.pending == 0
+        assert failed.translation_pending == 1
+        assert failed.errors
+        assert len(sender.messages) == 1
+    sender.messages.clear()
+    with StateDB(path) as db:
+        recovered = MonitorService(db, api, sender, FakeTranslator()).run_once()
+        assert recovered.delivered == 0
+        assert recovered.translation_delivered == 1
+        assert recovered.translation_pending == 0
+        assert len(sender.messages) == 1
+        assert "中文译文" in sender.messages[0]["card"]["header"]["title"]["content"]
+
+
+def test_failed_chinese_send_reuses_saved_translation_after_restart(tmp_path: Path) -> None:
+    class FailChineseSender(FakeSender):
+        def send(self, message: dict[str, Any]) -> None:
+            if "中文译文" in message["card"]["header"]["title"]["content"]:
+                raise RuntimeError("Chinese delivery failed")
+            super().send(message)
+
+    api, sender, translator = FakeAPI(), FailChineseSender(), FakeTranslator()
+    path = tmp_path / "state.sqlite3"
+    with StateDB(path) as db:
+        queue_event(db, api, sender)
+        failed = MonitorService(db, api, sender, translator).run_once()
+        assert failed.translation_pending == 1
+        assert len(translator.bodies) == 1
+    with StateDB(path) as db:
+        no_calls = FakeTranslator(fail=True)
+        recovered = MonitorService(db, api, FakeSender(), no_calls).run_once()
+        assert recovered.translation_delivered == 1
+        assert recovered.translation_pending == 0
+        assert no_calls.bodies == []
+
+
+def test_failed_original_does_not_translate(tmp_path: Path) -> None:
+    api, sender, translator = FakeAPI(), FakeSender(), FakeTranslator()
+    with StateDB(tmp_path / "state.sqlite3") as db:
+        queue_event(db, api, sender)
+        failed = MonitorService(db, api, FakeSender(fail_count=1), translator).run_once()
+        assert failed.pending == 1
+        assert failed.translation_pending == 0
+        assert translator.bodies == []
+        recovered = MonitorService(db, api, sender, translator).run_once()
+        assert recovered.delivered == recovered.translation_delivered == 1
+
+
+def test_no_translation_backfill_for_baseline_or_previously_sent_messages(tmp_path: Path) -> None:
+    api, sender, translator = FakeAPI(), FakeSender(), FakeTranslator()
+    with StateDB(tmp_path / "state.sqlite3") as db:
+        baseline = MonitorService(db, api, sender, translator).run_once()
+        assert baseline.delivered == 1
+        assert translator.bodies == []
+        queue_event(db, api, sender)
+        without_translation = MonitorService(db, api, sender).run_once()
+        assert without_translation.delivered == 1
+        assert db.pending_translations() == []
+        enabled = MonitorService(db, api, sender, translator).run_once()
+        assert enabled.translation_delivered == 0
+        assert translator.bodies == []
+
+
+def test_removing_config_pauses_pending_chinese_send(tmp_path: Path) -> None:
+    api, sender = FakeAPI(), FakeSender()
+    with StateDB(tmp_path / "state.sqlite3") as db:
+        queue_event(db, api, sender)
+        MonitorService(db, api, sender, FakeTranslator(fail=True)).run_once()
+        sender.messages.clear()
+        paused = MonitorService(db, api, sender).run_once()
+        assert paused.translation_pending == 1
+        assert sender.messages == []
+        resumed = MonitorService(db, api, sender, FakeTranslator()).run_once()
+        assert resumed.translation_delivered == 1
+
+
+def test_dry_run_never_calls_translation_or_changes_pending_records(tmp_path: Path) -> None:
+    api, sender, translator = FakeAPI(), FakeSender(), FakeTranslator()
+    with StateDB(tmp_path / "state.sqlite3") as db:
+        queue_event(db, api, sender)
+        before = db.stats()
+        preview = MonitorService(db, api, sender, translator).run_once(dry_run=True)
+        assert preview.previews
+        assert translator.bodies == []
+        assert sender.messages == []
+        assert db.stats() == before
+
+
+def test_forecast_translation_preserves_warning_and_original_dedup(tmp_path: Path) -> None:
+    api, sender, translator = FakeAPI(), FakeSender(), FakeTranslator()
+    with StateDB(tmp_path / "state.sqlite3") as db:
+        payload = queue_event(db, api, sender, "alerts")
+        summary = MonitorService(db, api, sender, translator).run_once()
+        assert summary.translation_delivered == 1
+        assert translator.bodies == [message_body("alerts", payload)]
+        assert "模型预测，不是 OpenAI 官方承诺" in sender.messages[1]["card"]["elements"][3]["elements"][0]["content"]
+        # A changed source payload with the same original notification key creates no translation.
+        db.observe_once("alerts", "new-post", {**payload, "summary": "Revised"}, key="post:new-post", notify=True)
+        again = MonitorService(db, api, sender, translator).run_once()
+        assert again.delivered == again.translation_delivered == 0
+        assert len(translator.bodies) == 1
+
+
+def test_old_database_gains_empty_translation_history(tmp_path: Path) -> None:
+    path = tmp_path / "state.sqlite3"
+    with StateDB(path) as db:
+        queue_event(db, FakeAPI(), FakeSender())
+        original_stats = db.stats()
+    with sqlite3.connect(path) as connection:
+        connection.execute("DROP TABLE translation_deliveries")
+    with StateDB(path) as db:
+        assert db.stats() == original_stats
+        assert db.pending_translations() == []
+
+
+def test_translation_record_and_original_success_are_atomic(tmp_path: Path) -> None:
+    with StateDB(tmp_path / "state.sqlite3") as db:
+        queue_event(db, FakeAPI(), FakeSender())
+        delivery_id = db.pending_deliveries()[0].id
+        db.connection.execute("""
+            CREATE TRIGGER fail_translation BEFORE INSERT ON translation_deliveries
+            BEGIN SELECT RAISE(ABORT, 'simulate failure'); END;
+        """)
+        try:
+            db.mark_delivered(delivery_id, queue_translation=True)
+        except sqlite3.IntegrityError:
+            pass
+        else:
+            raise AssertionError("expected simulated write failure")
+        assert db.pending_deliveries()[0].id == delivery_id
+        assert db.pending_translations() == []
 
 
 def test_first_run_baselines_and_only_sends_startup(tmp_path: Path) -> None:

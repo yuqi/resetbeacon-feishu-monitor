@@ -39,6 +39,14 @@ class Delivery:
     attempt_count: int
 
 
+@dataclass(frozen=True)
+class TranslationDelivery:
+    delivery_id: int
+    source: str
+    payload: dict[str, Any]
+    body: str | None
+
+
 class StateDB:
     def __init__(self, path: Path | str):
         self.path = Path(path)
@@ -91,6 +99,16 @@ class StateDB:
 
             CREATE INDEX IF NOT EXISTS deliveries_pending_idx
                 ON deliveries(status, id);
+
+            CREATE TABLE IF NOT EXISTS translation_deliveries (
+                delivery_id INTEGER PRIMARY KEY REFERENCES deliveries(id),
+                body TEXT,
+                status TEXT NOT NULL CHECK(status IN ('pending', 'delivered')),
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                delivered_at TEXT
+            );
 
             CREATE TABLE IF NOT EXISTS notification_keys (
                 source TEXT NOT NULL,
@@ -295,16 +313,73 @@ class StateDB:
             for row in rows
         ]
 
-    def mark_delivered(self, delivery_id: int) -> None:
-        self.connection.execute(
+    def mark_delivered(self, delivery_id: int, *, queue_translation: bool = False) -> None:
+        # Record original success and its Chinese follow-up in one transaction.
+        with self.connection:
+            self.connection.execute(
+                """
+                UPDATE deliveries
+                SET status = 'delivered', delivered_at = ?, last_error = NULL
+                WHERE id = ?
+                """,
+                (utc_now(), delivery_id),
+            )
+            if queue_translation:
+                self.connection.execute(
+                    """
+                    INSERT OR IGNORE INTO translation_deliveries(delivery_id, status, created_at)
+                    VALUES (?, 'pending', ?)
+                    """,
+                    (delivery_id, utc_now()),
+                )
+
+    def pending_translations(self) -> list[TranslationDelivery]:
+        rows = self.connection.execute(
             """
-            UPDATE deliveries
-            SET status = 'delivered', delivered_at = ?, last_error = NULL
-            WHERE id = ?
-            """,
-            (utc_now(), delivery_id),
-        )
-        self.connection.commit()
+            SELECT t.delivery_id, d.source, d.payload_json, t.body
+            FROM translation_deliveries t JOIN deliveries d ON d.id = t.delivery_id
+            WHERE t.status = 'pending' AND d.status = 'delivered'
+            ORDER BY t.delivery_id
+            """
+        ).fetchall()
+        return [
+            TranslationDelivery(
+                delivery_id=row["delivery_id"],
+                source=row["source"],
+                payload=json.loads(row["payload_json"]),
+                body=row["body"],
+            )
+            for row in rows
+        ]
+
+    def save_translation(self, delivery_id: int, body: str) -> None:
+        with self.connection:
+            self.connection.execute(
+                "UPDATE translation_deliveries SET body = ? WHERE delivery_id = ?",
+                (body, delivery_id),
+            )
+
+    def mark_translation_delivered(self, delivery_id: int) -> None:
+        with self.connection:
+            self.connection.execute(
+                """
+                UPDATE translation_deliveries
+                SET status = 'delivered', delivered_at = ?, last_error = NULL
+                WHERE delivery_id = ?
+                """,
+                (utc_now(), delivery_id),
+            )
+
+    def mark_translation_failed(self, delivery_id: int, error: str) -> None:
+        with self.connection:
+            self.connection.execute(
+                """
+                UPDATE translation_deliveries
+                SET attempt_count = attempt_count + 1, last_error = ?
+                WHERE delivery_id = ?
+                """,
+                (error[:1000], delivery_id),
+            )
 
     def mark_failed(self, delivery_id: int, error: str) -> None:
         self.connection.execute(
@@ -381,5 +456,11 @@ class StateDB:
             ).fetchone()[0],
             "delivered": self.connection.execute(
                 "SELECT COUNT(*) FROM deliveries WHERE status = 'delivered'"
+            ).fetchone()[0],
+            "translation_pending": self.connection.execute(
+                "SELECT COUNT(*) FROM translation_deliveries WHERE status = 'pending'"
+            ).fetchone()[0],
+            "translation_delivered": self.connection.execute(
+                "SELECT COUNT(*) FROM translation_deliveries WHERE status = 'delivered'"
             ).fetchone()[0],
         }

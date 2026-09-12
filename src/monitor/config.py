@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import math
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 class ConfigError(ValueError):
@@ -20,10 +22,15 @@ class Config:
     timeout_seconds: float = 15.0
     max_retries: int = 3
     log_level: str = "INFO"
+    translation_base_url: str = ""
+    translation_api_key: str = field(default="", repr=False)
+    translation_model: str = ""
+    translation_timeout_seconds: float = 60.0
+    translation_max_retries: int = 3
 
     @classmethod
     def from_env(cls) -> "Config":
-        return cls(
+        config = cls(
             history_url=os.getenv(
                 "RESET_BEACON_HISTORY_URL",
                 "https://resetbeacon.com/api/history",
@@ -42,7 +49,45 @@ class Config:
             timeout_seconds=_positive_float("HTTP_TIMEOUT_SECONDS", 15.0),
             max_retries=_positive_int("HTTP_MAX_RETRIES", 3),
             log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
+            translation_base_url=os.getenv("OPENAI_BASE_URL", "").strip().rstrip("/"),
+            translation_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
+            translation_model=os.getenv("OPENAI_MODEL", "").strip(),
+            translation_timeout_seconds=_positive_float("TRANSLATION_TIMEOUT_SECONDS", 60.0),
+            translation_max_retries=_positive_int("TRANSLATION_MAX_RETRIES", 3),
         )
+        config.require_translation_config()
+        return config
+
+    @property
+    def translation_enabled(self) -> bool:
+        return bool(self.translation_base_url and self.translation_api_key and self.translation_model)
+
+    def require_translation_config(self) -> None:
+        if not any((self.translation_base_url, self.translation_api_key, self.translation_model)):
+            return
+        for name, value in (
+            ("OPENAI_BASE_URL", self.translation_base_url),
+            ("OPENAI_API_KEY", self.translation_api_key),
+            ("OPENAI_MODEL", self.translation_model),
+        ):
+            if not value:
+                raise ConfigError(f"{name} is required when translation is enabled")
+        try:
+            parsed = urlparse(self.translation_base_url)
+            parsed.port  # Validate a supplied port as well as bracketed hosts.
+        except ValueError:
+            raise ConfigError("OPENAI_BASE_URL is not a valid HTTP(S) base URL") from None
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ConfigError("OPENAI_BASE_URL must be an HTTP(S) base URL without credentials, query or fragment")
+        if parsed.path.endswith("/chat/completions"):
+            raise ConfigError("OPENAI_BASE_URL must omit /chat/completions")
 
     def require_delivery_config(self) -> None:
         if not self.webhook_url:
@@ -57,7 +102,7 @@ def _positive_float(name: str, default: float) -> float:
         value = float(raw) if raw is not None else default
     except ValueError as exc:
         raise ConfigError(f"{name} must be a number") from exc
-    if value <= 0:
+    if not math.isfinite(value) or value <= 0:
         raise ConfigError(f"{name} must be positive")
     return value
 
@@ -71,4 +116,3 @@ def _positive_int(name: str, default: int) -> int:
     if value <= 0:
         raise ConfigError(f"{name} must be positive")
     return value
-

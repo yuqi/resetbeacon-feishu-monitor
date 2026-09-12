@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Protocol
 
 from .db import StateDB, notification_key
-from .render import render_message
+from .render import message_body, render_message, render_translation
 
 
 class API(Protocol):
@@ -17,6 +17,10 @@ class Sender(Protocol):
     def send(self, message: dict[str, Any]) -> None: ...
 
 
+class Translator(Protocol):
+    def translate(self, body: str) -> str: ...
+
+
 @dataclass
 class RunSummary:
     dry_run: bool
@@ -26,6 +30,8 @@ class RunSummary:
     suppressed: int = 0
     delivered: int = 0
     pending: int = 0
+    translation_delivered: int = 0
+    translation_pending: int = 0
     errors: list[str] = field(default_factory=list)
     previews: list[dict[str, Any]] = field(default_factory=list)
 
@@ -34,10 +40,14 @@ class RunSummary:
 
 
 class MonitorService:
-    def __init__(self, db: StateDB, api: API, sender: Sender | None):
+    def __init__(
+        self, db: StateDB, api: API, sender: Sender | None,
+        translator: Translator | None = None,
+    ):
         self.db = db
         self.api = api
         self.sender = sender
+        self.translator = translator
 
     def run_once(self, *, dry_run: bool = False) -> RunSummary:
         summary = RunSummary(dry_run=dry_run)
@@ -53,11 +63,13 @@ class MonitorService:
         if not dry_run:
             self._queue_startup_if_ready(history, alerts)
             self._deliver_pending(summary)
+            self._deliver_translations(summary)
         else:
             self._preview_startup_if_ready(history, alerts, summary)
             self._preview_pending(summary)
 
         summary.pending = len(self.db.pending_deliveries())
+        summary.translation_pending = len(self.db.pending_translations())
         return summary
 
     def _fetch(
@@ -245,11 +257,30 @@ class MonitorService:
                 continue
             try:
                 self.sender.send(render_message(delivery.source, delivery.payload))
-                self.db.mark_delivered(delivery.id)
+                self.db.mark_delivered(
+                    delivery.id,
+                    queue_translation=self.translator is not None and delivery.source in {"history", "alerts"},
+                )
                 summary.delivered += 1
             except Exception as exc:
                 self.db.mark_failed(delivery.id, str(exc))
                 summary.errors.append(f"delivery {delivery.id}: {exc}")
+
+    def _deliver_translations(self, summary: RunSummary) -> None:
+        if self.translator is None or self.sender is None:
+            return
+        for delivery in self.db.pending_translations():
+            try:
+                body = delivery.body
+                if body is None:
+                    body = self.translator.translate(message_body(delivery.source, delivery.payload))
+                    self.db.save_translation(delivery.delivery_id, body)
+                self.sender.send(render_translation(delivery.source, delivery.payload, body))
+                self.db.mark_translation_delivered(delivery.delivery_id)
+                summary.translation_delivered += 1
+            except Exception as exc:
+                self.db.mark_translation_failed(delivery.delivery_id, str(exc))
+                summary.errors.append(f"translation {delivery.delivery_id}: {exc}")
 
     def _preview_pending(self, summary: RunSummary) -> None:
         for delivery in self.db.pending_deliveries():

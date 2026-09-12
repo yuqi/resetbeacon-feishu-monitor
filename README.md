@@ -45,6 +45,28 @@ FEISHU_SIGNING_SECRET=...
 
 Webhook 和签名密钥只从环境变量读取，不会写入日志。建议给机器人配置安全关键词 `Codex`；所有消息标题都包含该词。
 
+## 中文翻译（可选）
+
+配置以下三项后，History 和 Alerts 原文发送成功后，会调用 OpenAI 兼容接口翻译正文，并追加发送一张标注“中文译文”的卡片。三项全部留空时保持原来的发送逻辑，无需额外开关；只填部分配置会报配置错误。
+
+```dotenv
+OPENAI_BASE_URL=https://your-provider.example/v1
+OPENAI_API_KEY=your-api-key
+OPENAI_MODEL=your-model-name
+TRANSLATION_TIMEOUT_SECONDS=60
+TRANSLATION_MAX_RETRIES=3
+```
+
+`OPENAI_BASE_URL` 填 API 基础地址，包含服务商要求的路径前缀；程序自动追加 `/chat/completions`。请求使用 Bearer 密钥、`model` 和 `messages`，返回读取 `choices[0].message.content`，要求 `finish_reason=stop`。接口格式参考 [OpenAI Chat Completions 官方文档](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)。HTTP 429、5xx、网络错误及无效译文会在本轮有限重试；其他 HTTP 错误留待下轮处理。超时单位为秒，重试配置表示每轮最多尝试次数。
+
+仅正文交给模型翻译为简体中文；标题保留原文并添加译文标记，状态字段、时间、预测风险提示和来源按钮保留。启动通知和接口故障通知不调用翻译。
+
+仍沿用原文去重，只为成功发送的原文附加一条中文发送记录，不按译文内容另行去重。原文成功与中文待发送记录在同一个 SQLite 事务中保存；翻译或中文投递失败时，后续轮次只重试中文。生成的译文先保存，飞书重试时复用，重启后仍有效。不会给启用前已经发送或已设为基线的旧消息补发译文。
+
+移除全部 OpenAI 配置后停止翻译及中文投递，已有中文待发送记录保留，重新配置后继续。`delivered`/`pending` 仍统计原文，中文历史单独使用 `translation_delivered`/`translation_pending`。中文失败会使本轮退出码为 `1`。
+
+`--dry-run` 只预览原文，不调用模型、不生成译文；`health` 显示 `translationConfigured`，不探测模型接口。systemd 部署时把这些变量填入 `/etc/resetbeacon-feishu-monitor.env`，下一轮任务读取生效。
+
 ## 使用
 
 真实拉取并预览，不写飞书、不初始化基线：
