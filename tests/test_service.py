@@ -86,7 +86,7 @@ def test_translation_follows_original_and_keeps_card_metadata(tmp_path: Path) ->
         original, translated = [message["card"] for message in sender.messages]
         assert translated["elements"][0]["text"]["content"] == "所有 Codex 用户的用量即将重置。"
         assert translated["elements"][1:] == original["elements"][1:]
-        assert "中文译文" in translated["header"]["title"]["content"]
+        assert translated["header"] == original["header"]
         assert translator.bodies == [message_body("history", payload)]
         assert db.stats()["translation_delivered"] == 1
         again = MonitorService(db, api, sender, translator).run_once()
@@ -112,13 +112,13 @@ def test_translation_failure_retries_after_restart_without_resending_original(tm
         assert recovered.translation_delivered == 1
         assert recovered.translation_pending == 0
         assert len(sender.messages) == 1
-        assert "中文译文" in sender.messages[0]["card"]["header"]["title"]["content"]
+        assert sender.messages[0]["card"]["elements"][0]["text"]["content"] == "所有 Codex 用户的用量即将重置。"
 
 
 def test_failed_chinese_send_reuses_saved_translation_after_restart(tmp_path: Path) -> None:
     class FailChineseSender(FakeSender):
         def send(self, message: dict[str, Any]) -> None:
-            if "中文译文" in message["card"]["header"]["title"]["content"]:
+            if message["card"]["elements"][0]["text"]["content"] == "所有 Codex 用户的用量即将重置。":
                 raise RuntimeError("Chinese delivery failed")
             super().send(message)
 
@@ -196,6 +196,7 @@ def test_forecast_translation_preserves_warning_and_original_dedup(tmp_path: Pat
         summary = MonitorService(db, api, sender, translator).run_once()
         assert summary.translation_delivered == 1
         assert translator.bodies == [message_body("alerts", payload)]
+        assert sender.messages[1]["card"]["header"] == sender.messages[0]["card"]["header"]
         assert "模型预测，不是 OpenAI 官方承诺" in sender.messages[1]["card"]["elements"][3]["elements"][0]["content"]
         # A changed source payload with the same original notification key creates no translation.
         db.observe_once("alerts", "new-post", {**payload, "summary": "Revised"}, key="post:new-post", notify=True)

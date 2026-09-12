@@ -37,9 +37,6 @@ def message_body(source: str, payload: dict[str, Any]) -> str:
 def render_translation(source: str, payload: dict[str, Any], body: str) -> dict[str, Any]:
     message = render_message(source, payload)
     card = message["card"]
-    title = card["header"]["title"]["content"]
-    prefix = "中文译文" if "Codex" in title else "Codex · 中文译文"
-    card["header"]["title"]["content"] = f"{prefix} · {title}"
     card["elements"][0]["text"]["content"] = _truncate(body)
     return message
 
