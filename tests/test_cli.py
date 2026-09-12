@@ -9,9 +9,11 @@ from monitor.cli import main
 
 
 @pytest.mark.parametrize("configured,dry_run", [(False, False), (True, False), (True, True)])
+@pytest.mark.parametrize("effort", ["", "high"])
 def test_cli_automatically_translates_only_when_configured(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     configured: bool, dry_run: bool,
+    effort: str,
 ) -> None:
     fixtures = Path(__file__).parent / "fixtures"
     history = json.loads((fixtures / "history.json").read_text())
@@ -29,6 +31,7 @@ def test_cli_automatically_translates_only_when_configured(
         "OPENAI_BASE_URL": "https://provider.invalid/v1" if configured else "",
         "OPENAI_API_KEY": "private-test-key" if configured else "",
         "OPENAI_MODEL": "configured-model" if configured else "",
+        "OPENAI_REASONING_EFFORT": effort,
         "TRANSLATION_TIMEOUT_SECONDS": "20",
         "TRANSLATION_MAX_RETRIES": "1",
     }.items():
@@ -43,6 +46,10 @@ def test_cli_automatically_translates_only_when_configured(
         assert request.url == "https://provider.invalid/v1/chat/completions"
         payload = json.loads(request.content)
         assert payload["model"] == "configured-model"
+        if effort:
+            assert payload["reasoning_effort"] == effort
+        else:
+            assert "reasoning_effort" not in payload
         assert request.headers["Authorization"] == "Bearer private-test-key"
         translated.append(payload)
         return httpx.Response(200, json={"choices": [{"message": {"content": "新的重置消息。"}, "finish_reason": "stop"}]})

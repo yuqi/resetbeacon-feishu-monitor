@@ -72,6 +72,7 @@ def _run_once(config: Config, *, dry_run: bool) -> int:
                             base_url=config.translation_base_url,
                             api_key=config.translation_api_key,
                             model=config.translation_model,
+                            reasoning_effort=config.translation_reasoning_effort,
                             timeout_seconds=config.translation_timeout_seconds,
                             max_retries=config.translation_max_retries,
                         ))

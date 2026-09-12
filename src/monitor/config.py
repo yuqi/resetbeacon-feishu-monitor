@@ -25,6 +25,7 @@ class Config:
     translation_base_url: str = ""
     translation_api_key: str = field(default="", repr=False)
     translation_model: str = ""
+    translation_reasoning_effort: str | None = None
     translation_timeout_seconds: float = 60.0
     translation_max_retries: int = 3
 
@@ -52,6 +53,7 @@ class Config:
             translation_base_url=os.getenv("OPENAI_BASE_URL", "").strip().rstrip("/"),
             translation_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
             translation_model=os.getenv("OPENAI_MODEL", "").strip(),
+            translation_reasoning_effort=_reasoning_effort(),
             translation_timeout_seconds=_positive_float("TRANSLATION_TIMEOUT_SECONDS", 60.0),
             translation_max_retries=_positive_int("TRANSLATION_MAX_RETRIES", 3),
         )
@@ -104,6 +106,15 @@ def _positive_float(name: str, default: float) -> float:
         raise ConfigError(f"{name} must be a number") from exc
     if not math.isfinite(value) or value <= 0:
         raise ConfigError(f"{name} must be positive")
+    return value
+
+
+def _reasoning_effort() -> str | None:
+    value = os.getenv("OPENAI_REASONING_EFFORT", "").strip().lower()
+    if not value:
+        return None
+    if value not in {"none", "minimal", "low", "medium", "high", "xhigh", "max"}:
+        raise ConfigError("OPENAI_REASONING_EFFORT must be none, minimal, low, medium, high, xhigh or max")
     return value
 
 

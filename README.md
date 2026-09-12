@@ -53,13 +53,16 @@ Webhook 和签名密钥只从环境变量读取，不会写入日志。建议给
 OPENAI_BASE_URL=https://your-provider.example/v1
 OPENAI_API_KEY=your-api-key
 OPENAI_MODEL=your-model-name
+OPENAI_REASONING_EFFORT=
 TRANSLATION_TIMEOUT_SECONDS=60
 TRANSLATION_MAX_RETRIES=3
 ```
 
 `OPENAI_BASE_URL` 填 API 基础地址，包含服务商要求的路径前缀；程序自动追加 `/chat/completions`。请求使用 Bearer 密钥、`model` 和 `messages`，返回读取 `choices[0].message.content`，要求 `finish_reason=stop`。接口格式参考 [OpenAI Chat Completions 官方文档](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)。HTTP 429、5xx、网络错误及无效译文会在本轮有限重试；其他 HTTP 错误留待下轮处理。超时单位为秒，重试配置表示每轮最多尝试次数。
 
-仅正文交给模型翻译为简体中文；标题保留原文并添加译文标记，状态字段、时间、预测风险提示和来源按钮保留。启动通知和接口故障通知不调用翻译。
+`OPENAI_REASONING_EFFORT` 可选，留空时不发送该参数，沿用接口默认行为。程序接受 `none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`，实际支持范围由模型和服务商决定（例如 GPT-6 Astra 支持 `low` 到 `max` 的五档）。可以对比 `medium` 与 `high` 的译文质量和耗时；提高档位可能增加耗时和费用，不保证译文一定更好。若请求超过默认 60 秒，可相应增加 `TRANSLATION_TIMEOUT_SECONDS`。不支持参数时报错，不会静默移除参数降级；清空该配置即可恢复默认行为。仅填写推理档位不会启用翻译。
+
+仅正文交给模型翻译为简体中文，提示词面向中文技术社区，要求忠实原意、避免直译腔，并在输出前核对数字、否定、时间、语气和术语；标题保留原文并添加译文标记，状态字段、时间、预测风险提示和来源按钮保留。启动通知和接口故障通知不调用翻译。提示词或推理档位变更只影响之后新生成的译文，已缓存的待发送译文仍复用。
 
 仍沿用原文去重，只为成功发送的原文附加一条中文发送记录，不按译文内容另行去重。原文成功与中文待发送记录在同一个 SQLite 事务中保存；翻译或中文投递失败时，后续轮次只重试中文。生成的译文先保存，飞书重试时复用，重启后仍有效。不会给启用前已经发送或已设为基线的旧消息补发译文。
 

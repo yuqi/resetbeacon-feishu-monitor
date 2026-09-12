@@ -5,12 +5,27 @@ from monitor.config import Config, ConfigError
 
 @pytest.fixture(autouse=True)
 def clean_translation_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in ("OPENAI_BASE_URL", "OPENAI_API_KEY", "OPENAI_MODEL", "TRANSLATION_TIMEOUT_SECONDS", "TRANSLATION_MAX_RETRIES"):
+    for name in ("OPENAI_BASE_URL", "OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_REASONING_EFFORT", "TRANSLATION_TIMEOUT_SECONDS", "TRANSLATION_MAX_RETRIES"):
         monkeypatch.delenv(name, raising=False)
 
 
 def test_translation_is_disabled_without_openai_configuration() -> None:
     assert not Config.from_env().translation_enabled
+    assert Config.from_env().translation_reasoning_effort is None
+
+
+@pytest.mark.parametrize("raw,expected", [("", None), ("  ", None), (" HIGH ", "high"), ("medium", "medium"), ("none", "none"), ("minimal", "minimal"), ("low", "low"), ("xhigh", "xhigh"), ("max", "max")])
+def test_optional_reasoning_effort_does_not_enable_translation(monkeypatch: pytest.MonkeyPatch, raw: str, expected: str | None) -> None:
+    monkeypatch.setenv("OPENAI_REASONING_EFFORT", raw)
+    config = Config.from_env()
+    assert config.translation_reasoning_effort == expected
+    assert not config.translation_enabled
+
+
+def test_invalid_reasoning_effort_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_REASONING_EFFORT", "deep")
+    with pytest.raises(ConfigError, match="OPENAI_REASONING_EFFORT"):
+        Config.from_env()
 
 
 def test_complete_configuration_enables_translation(monkeypatch: pytest.MonkeyPatch) -> None:
