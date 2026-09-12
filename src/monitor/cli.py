@@ -56,7 +56,7 @@ def _run_once(config: Config, *, dry_run: bool) -> int:
             max_retries=config.max_retries,
         ) as api:
             if dry_run:
-                summary = MonitorService(db, api, None).run_once(dry_run=True)
+                summary = MonitorService(db, api, None, send_language=config.send_language).run_once(dry_run=True)
             else:
                 assert config.webhook_url is not None
                 with ExitStack() as stack:
@@ -76,7 +76,9 @@ def _run_once(config: Config, *, dry_run: bool) -> int:
                             timeout_seconds=config.translation_timeout_seconds,
                             max_retries=config.translation_max_retries,
                         ))
-                    summary = MonitorService(db, api, sender, translator).run_once()
+                    summary = MonitorService(
+                        db, api, sender, translator, send_language=config.send_language,
+                    ).run_once()
     except AlreadyRunningError as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
         return 3
@@ -89,6 +91,7 @@ def _health(config: Config) -> int:
         "webhookConfigured": bool(config.webhook_url),
         "signingConfigured": bool(config.signing_secret),
         "translationConfigured": config.translation_enabled,
+        "sendLanguage": config.send_language or "en,zh",
         "database": str(config.db_path.resolve()),
     }
     try:

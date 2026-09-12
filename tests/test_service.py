@@ -6,6 +6,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from monitor.db import StateDB
 from monitor.service import MonitorService
 from monitor.render import message_body, render_message
@@ -62,6 +64,119 @@ class FakeTranslator:
         if self.fail:
             raise RuntimeError("temporary translation failure")
         return "所有 Codex 用户的用量即将重置。"
+
+
+@pytest.mark.parametrize("source", ["history", "alerts"])
+@pytest.mark.parametrize("language", [None, "en", "zh"])
+def test_selected_language_controls_event_delivery(tmp_path: Path, source: str, language: str | None) -> None:
+    api, sender, translator = FakeAPI(), FakeSender(), FakeTranslator()
+    with StateDB(tmp_path / "state.sqlite3") as db:
+        payload = queue_event(db, api, sender, source)
+        summary = MonitorService(db, api, sender, translator, send_language=language).run_once()
+        assert summary.delivered == int(language != "zh")
+        assert summary.translation_delivered == int(language != "en")
+        assert summary.suppressed == int(language == "zh")
+        assert len(sender.messages) == (2 if language is None else 1)
+        if language != "zh":
+            assert sender.messages[0] == render_message(source, payload)
+        if language != "en":
+            assert sender.messages[-1]["card"]["elements"][0]["text"]["content"] == "所有 Codex 用户的用量即将重置。"
+        assert len(translator.bodies) == int(language != "en")
+        if language == "zh":
+            row = db.connection.execute("SELECT original_skipped, delivered_at FROM deliveries WHERE source = ? ORDER BY id DESC LIMIT 1", (source,)).fetchone()
+            assert row["original_skipped"] == 1
+            assert row["delivered_at"] is None
+            assert db.stats()["original_skipped"] == 1
+
+
+@pytest.mark.parametrize("failure", ["translation", "send"])
+def test_chinese_only_retry_after_restart_keeps_original_unsent(tmp_path: Path, failure: str) -> None:
+    path = tmp_path / "state.sqlite3"
+    api, sender = FakeAPI(), FakeSender()
+    with StateDB(path) as db:
+        queue_event(db, api, sender)
+        failing_translator = FakeTranslator(fail=failure == "translation")
+        failing_sender = FakeSender(fail_count=int(failure == "send"))
+        summary = MonitorService(db, api, failing_sender, failing_translator, send_language="zh").run_once()
+        assert summary.errors
+        assert summary.delivered == summary.translation_delivered == 0
+        assert summary.translation_pending == 1
+        assert failing_sender.messages == []
+    with StateDB(path) as db:
+        translator = FakeTranslator(fail=failure == "send")
+        recovered = MonitorService(db, api, sender, translator, send_language="zh").run_once()
+        assert not recovered.errors
+        assert recovered.delivered == 0
+        assert recovered.translation_delivered == 1
+        assert recovered.translation_pending == 0
+        assert len(sender.messages) == 1
+        assert len(translator.bodies) == int(failure == "translation")
+
+
+def test_english_only_holds_existing_chinese_retry(tmp_path: Path) -> None:
+    api, sender = FakeAPI(), FakeSender()
+    with StateDB(tmp_path / "state.sqlite3") as db:
+        queue_event(db, api, sender)
+        MonitorService(db, api, sender, FakeTranslator(fail=True)).run_once()
+        sender.messages.clear()
+        translator = FakeTranslator()
+        paused = MonitorService(db, api, sender, translator, send_language="en").run_once()
+        assert paused.translation_pending == 1
+        assert sender.messages == translator.bodies == []
+        resumed = MonitorService(db, api, sender, translator, send_language="zh").run_once()
+        assert resumed.delivered == 0
+        assert resumed.translation_delivered == 1
+        assert len(sender.messages) == 1
+
+
+@pytest.mark.parametrize("first_language", ["en", "zh"])
+def test_changing_language_does_not_backfill_processed_events(tmp_path: Path, first_language: str) -> None:
+    api, sender, translator = FakeAPI(), FakeSender(), FakeTranslator()
+    with StateDB(tmp_path / "state.sqlite3") as db:
+        queue_event(db, api, sender)
+        MonitorService(db, api, sender, translator, send_language=first_language).run_once()
+        sender.messages.clear()
+        translator.bodies.clear()
+        changed = MonitorService(db, api, sender, translator).run_once()
+        assert changed.delivered == changed.translation_delivered == 0
+        assert sender.messages == translator.bodies == []
+
+
+def test_chinese_only_without_translator_keeps_event_pending(tmp_path: Path) -> None:
+    api, sender = FakeAPI(), FakeSender()
+    with StateDB(tmp_path / "state.sqlite3") as db:
+        queue_event(db, api, sender)
+        summary = MonitorService(db, api, sender, send_language="zh").run_once()
+        assert summary.errors
+        assert summary.pending == 1
+        assert sender.messages == []
+
+
+@pytest.mark.parametrize("language", ["en", "zh"])
+def test_language_selection_keeps_operational_notifications(tmp_path: Path, language: str) -> None:
+    api, sender, translator = FakeAPI(), FakeSender(), FakeTranslator()
+    with StateDB(tmp_path / "state.sqlite3") as db:
+        startup = MonitorService(db, api, sender, translator, send_language=language).run_once()
+        assert startup.delivered == 1
+        assert "已启动" in sender.messages[-1]["card"]["header"]["title"]["content"]
+        db.observe("health", "test-outage", {"status": "unavailable"}, notify=True)
+        outage = MonitorService(db, api, sender, translator, send_language=language).run_once()
+        assert outage.delivered == 1
+        assert "数据源异常" in sender.messages[-1]["card"]["header"]["title"]["content"]
+        assert translator.bodies == []
+
+
+def test_existing_database_migrates_language_tracking_without_losing_history(tmp_path: Path) -> None:
+    path = tmp_path / "state.sqlite3"
+    with StateDB(path) as db:
+        queue_event(db, FakeAPI(), FakeSender())
+        before = db.stats()
+    with sqlite3.connect(path) as connection:
+        connection.execute("ALTER TABLE deliveries DROP COLUMN original_skipped")
+    with StateDB(path) as db:
+        assert db.stats() == before
+        assert db.pending_deliveries()
+        assert all(row[0] == 0 for row in db.connection.execute("SELECT original_skipped FROM deliveries"))
 
 
 def queue_event(db: StateDB, api: FakeAPI, sender: FakeSender, source: str = "history") -> dict:
@@ -217,7 +332,8 @@ def test_old_database_gains_empty_translation_history(tmp_path: Path) -> None:
         assert db.pending_translations() == []
 
 
-def test_translation_record_and_original_success_are_atomic(tmp_path: Path) -> None:
+@pytest.mark.parametrize("skip_original", [False, True])
+def test_translation_record_and_original_success_are_atomic(tmp_path: Path, skip_original: bool) -> None:
     with StateDB(tmp_path / "state.sqlite3") as db:
         queue_event(db, FakeAPI(), FakeSender())
         delivery_id = db.pending_deliveries()[0].id
@@ -226,13 +342,14 @@ def test_translation_record_and_original_success_are_atomic(tmp_path: Path) -> N
             BEGIN SELECT RAISE(ABORT, 'simulate failure'); END;
         """)
         try:
-            db.mark_delivered(delivery_id, queue_translation=True)
+            db.mark_delivered(delivery_id, queue_translation=True, skip_original=skip_original)
         except sqlite3.IntegrityError:
             pass
         else:
             raise AssertionError("expected simulated write failure")
         assert db.pending_deliveries()[0].id == delivery_id
         assert db.pending_translations() == []
+        assert db.stats()["original_skipped"] == 0
 
 
 def test_first_run_baselines_and_only_sends_startup(tmp_path: Path) -> None:

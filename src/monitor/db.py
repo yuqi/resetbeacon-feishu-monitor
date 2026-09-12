@@ -94,7 +94,8 @@ class StateDB:
                 attempt_count INTEGER NOT NULL DEFAULT 0,
                 last_error TEXT,
                 created_at TEXT NOT NULL,
-                delivered_at TEXT
+                delivered_at TEXT,
+                original_skipped INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE INDEX IF NOT EXISTS deliveries_pending_idx
@@ -127,6 +128,11 @@ class StateDB:
             );
             """
         )
+        columns = {row["name"] for row in self.connection.execute("PRAGMA table_info(deliveries)")}
+        if "original_skipped" not in columns:
+            self.connection.execute(
+                "ALTER TABLE deliveries ADD COLUMN original_skipped INTEGER NOT NULL DEFAULT 0"
+            )
         self._seed_notification_keys()
         self.connection.commit()
 
@@ -313,16 +319,19 @@ class StateDB:
             for row in rows
         ]
 
-    def mark_delivered(self, delivery_id: int, *, queue_translation: bool = False) -> None:
-        # Record original success and its Chinese follow-up in one transaction.
+    def mark_delivered(
+        self, delivery_id: int, *, queue_translation: bool = False,
+        skip_original: bool = False,
+    ) -> None:
+        # Close the original stage and record its Chinese follow-up atomically.
         with self.connection:
             self.connection.execute(
                 """
                 UPDATE deliveries
-                SET status = 'delivered', delivered_at = ?, last_error = NULL
+                SET status = 'delivered', delivered_at = ?, original_skipped = ?, last_error = NULL
                 WHERE id = ?
                 """,
-                (utc_now(), delivery_id),
+                (None if skip_original else utc_now(), int(skip_original), delivery_id),
             )
             if queue_translation:
                 self.connection.execute(
@@ -455,7 +464,10 @@ class StateDB:
                 "SELECT COUNT(*) FROM deliveries WHERE status = 'pending'"
             ).fetchone()[0],
             "delivered": self.connection.execute(
-                "SELECT COUNT(*) FROM deliveries WHERE status = 'delivered'"
+                "SELECT COUNT(*) FROM deliveries WHERE status = 'delivered' AND original_skipped = 0"
+            ).fetchone()[0],
+            "original_skipped": self.connection.execute(
+                "SELECT COUNT(*) FROM deliveries WHERE original_skipped = 1"
             ).fetchone()[0],
             "translation_pending": self.connection.execute(
                 "SELECT COUNT(*) FROM translation_deliveries WHERE status = 'pending'"

@@ -43,11 +43,13 @@ class MonitorService:
     def __init__(
         self, db: StateDB, api: API, sender: Sender | None,
         translator: Translator | None = None,
+        *, send_language: str | None = None,
     ):
         self.db = db
         self.api = api
         self.sender = sender
         self.translator = translator
+        self.send_language = send_language
 
     def run_once(self, *, dry_run: bool = False) -> RunSummary:
         summary = RunSummary(dry_run=dry_run)
@@ -256,10 +258,19 @@ class MonitorService:
                 summary.suppressed += 1
                 continue
             try:
+                if self.send_language == "zh" and delivery.source in {"history", "alerts"}:
+                    if self.translator is None:
+                        raise ValueError("Chinese delivery requires a translator")
+                    self.db.mark_delivered(delivery.id, queue_translation=True, skip_original=True)
+                    summary.suppressed += 1
+                    continue
                 self.sender.send(render_message(delivery.source, delivery.payload))
                 self.db.mark_delivered(
                     delivery.id,
-                    queue_translation=self.translator is not None and delivery.source in {"history", "alerts"},
+                    queue_translation=(
+                        self.send_language != "en" and self.translator is not None
+                        and delivery.source in {"history", "alerts"}
+                    ),
                 )
                 summary.delivered += 1
             except Exception as exc:
@@ -267,7 +278,7 @@ class MonitorService:
                 summary.errors.append(f"delivery {delivery.id}: {exc}")
 
     def _deliver_translations(self, summary: RunSummary) -> None:
-        if self.translator is None or self.sender is None:
+        if self.send_language == "en" or self.translator is None or self.sender is None:
             return
         for delivery in self.db.pending_translations():
             try:

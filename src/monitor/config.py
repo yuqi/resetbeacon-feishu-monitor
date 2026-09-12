@@ -22,6 +22,7 @@ class Config:
     timeout_seconds: float = 15.0
     max_retries: int = 3
     log_level: str = "INFO"
+    send_language: str | None = None
     translation_base_url: str = ""
     translation_api_key: str = field(default="", repr=False)
     translation_model: str = ""
@@ -50,6 +51,7 @@ class Config:
             timeout_seconds=_positive_float("HTTP_TIMEOUT_SECONDS", 15.0),
             max_retries=_positive_int("HTTP_MAX_RETRIES", 3),
             log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
+            send_language=_send_language(),
             translation_base_url=os.getenv("OPENAI_BASE_URL", "").strip().rstrip("/"),
             translation_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
             translation_model=os.getenv("OPENAI_MODEL", "").strip(),
@@ -62,10 +64,16 @@ class Config:
 
     @property
     def translation_enabled(self) -> bool:
-        return bool(self.translation_base_url and self.translation_api_key and self.translation_model)
+        return self.send_language != "en" and bool(
+            self.translation_base_url and self.translation_api_key and self.translation_model
+        )
 
     def require_translation_config(self) -> None:
-        if not any((self.translation_base_url, self.translation_api_key, self.translation_model)):
+        if self.send_language == "en":
+            return
+        if self.send_language != "zh" and not any((
+            self.translation_base_url, self.translation_api_key, self.translation_model,
+        )):
             return
         for name, value in (
             ("OPENAI_BASE_URL", self.translation_base_url),
@@ -116,6 +124,13 @@ def _reasoning_effort() -> str | None:
     if value not in {"none", "minimal", "low", "medium", "high", "xhigh", "max"}:
         raise ConfigError("OPENAI_REASONING_EFFORT must be none, minimal, low, medium, high, xhigh or max")
     return value
+
+
+def _send_language() -> str | None:
+    value = os.getenv("SEND_LANGUAGE", "").strip().lower()
+    if value not in {"", "en", "zh"}:
+        raise ConfigError("SEND_LANGUAGE must be en, zh or empty")
+    return value or None
 
 
 def _positive_int(name: str, default: int) -> int:

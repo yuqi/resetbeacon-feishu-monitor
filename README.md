@@ -47,9 +47,18 @@ Webhook 和签名密钥只从环境变量读取，不会写入日志。建议给
 
 ## 中文翻译（可选）
 
-配置以下三项后，History 和 Alerts 原文发送成功后，会调用 OpenAI 兼容接口翻译正文，并追加发送一张中文卡片，标题与原文相同。三项全部留空时保持原来的发送逻辑，无需额外开关；只填部分配置会报配置错误。
+`SEND_LANGUAGE` 控制 History 和 Alerts 的发送语言：
+
+| 配置 | 行为 |
+| --- | --- |
+| 留空或不配置 | 先发原文，再发中文；未配置 OpenAI 时只发原文 |
+| `en` | 只发英文原文，不调用模型，也不投递已有的中文待发送记录 |
+| `zh` | 只发中文译文，必须完整配置 OpenAI；翻译失败时保留待发送记录，不回退发送原文 |
+
+默认情况下，配置以下三项后，History 和 Alerts 原文发送成功后，会调用 OpenAI 兼容接口翻译正文，并追加发送一张中文卡片，标题与原文相同。三项全部留空时保持原来的发送逻辑，无需额外开关；只填部分配置会报配置错误。`SEND_LANGUAGE=en` 不要求 OpenAI 配置。
 
 ```dotenv
+SEND_LANGUAGE=
 OPENAI_BASE_URL=https://your-provider.example/v1
 OPENAI_API_KEY=your-api-key
 OPENAI_MODEL=your-model-name
@@ -64,11 +73,13 @@ TRANSLATION_MAX_RETRIES=3
 
 仅正文交给模型翻译为简体中文，提示词面向中文技术社区，要求忠实原意、避免直译腔，并在输出前核对数字、否定、时间、语气和术语；标题、状态字段、时间、预测风险提示和来源按钮与原文保持一致。启动通知和接口故障通知不调用翻译。提示词或推理档位变更只影响之后新生成的译文，已缓存的待发送译文仍复用。
 
-仍沿用原文去重，只为成功发送的原文附加一条中文发送记录，不按译文内容另行去重。原文成功与中文待发送记录在同一个 SQLite 事务中保存；翻译或中文投递失败时，后续轮次只重试中文。生成的译文先保存，飞书重试时复用，重启后仍有效。不会给启用前已经发送或已设为基线的旧消息补发译文。
+仍沿用原文事件的去重规则，不按译文内容另行去重。双语模式下，原文成功与中文待发送记录在同一个 SQLite 事务中保存；仅中文模式下，则原子记录跳过原文和中文待发送任务。翻译或中文投递失败时，后续轮次只重试中文。生成的译文先保存，飞书重试时复用，重启后仍有效。切换语言不会为已处理的事件补发另一种语言，也不会给已设为基线的旧消息补发译文。
 
-移除全部 OpenAI 配置后停止翻译及中文投递，已有中文待发送记录保留，重新配置后继续。`delivered`/`pending` 仍统计原文，中文历史单独使用 `translation_delivered`/`translation_pending`。中文失败会使本轮退出码为 `1`。
+仅中文模式下，原文记录使用 `original_skipped=1` 标识，`delivered_at` 留空，表示原文步骤已跳过而非发送成功；中文的发送时间和结果仍记录在 `translation_deliveries` 中。运行摘要的 `suppressed` 包含跳过的原文，数据库统计的 `original_skipped` 单独统计这类记录。
 
-`--dry-run` 只预览原文，不调用模型、不生成译文；`health` 显示 `translationConfigured`，不探测模型接口。systemd 部署时把这些变量填入 `/etc/resetbeacon-feishu-monitor.env`，下一轮任务读取生效。
+语言留空时，移除全部 OpenAI 配置会停止翻译及中文投递；设置 `en` 同样暂停中文投递。已有中文待发送记录保留，切回双语或中文且 OpenAI 配置完整后继续。`delivered`/`pending` 仍统计原文，中文历史单独使用 `translation_delivered`/`translation_pending`。中文失败会使本轮退出码为 `1`。
+
+语言选项只控制事件正文，标题与其他卡片信息保留，启动通知和接口故障通知照常发送。`--dry-run` 在所有语言模式下都只预览原文供核对，不调用模型、不生成译文；`health` 显示 `sendLanguage` 和 `translationConfigured`，不探测模型接口。systemd 部署时把这些变量填入 `/etc/resetbeacon-feishu-monitor.env`，下一轮任务读取生效。
 
 ## 使用
 

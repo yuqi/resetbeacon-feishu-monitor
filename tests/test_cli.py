@@ -10,10 +10,12 @@ from monitor.cli import main
 
 @pytest.mark.parametrize("configured,dry_run", [(False, False), (True, False), (True, True)])
 @pytest.mark.parametrize("effort", ["", "high"])
+@pytest.mark.parametrize("language", ["", "en", "zh"])
 def test_cli_automatically_translates_only_when_configured(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     configured: bool, dry_run: bool,
     effort: str,
+    language: str,
 ) -> None:
     fixtures = Path(__file__).parent / "fixtures"
     history = json.loads((fixtures / "history.json").read_text())
@@ -32,6 +34,7 @@ def test_cli_automatically_translates_only_when_configured(
         "OPENAI_API_KEY": "private-test-key" if configured else "",
         "OPENAI_MODEL": "configured-model" if configured else "",
         "OPENAI_REASONING_EFFORT": effort,
+        "SEND_LANGUAGE": language,
         "TRANSLATION_TIMEOUT_SECONDS": "20",
         "TRANSLATION_MAX_RETRIES": "1",
     }.items():
@@ -56,6 +59,10 @@ def test_cli_automatically_translates_only_when_configured(
 
     client_class = httpx.Client
     monkeypatch.setattr(httpx, "Client", lambda **kwargs: client_class(transport=httpx.MockTransport(handle), **kwargs))
+    if language == "zh" and not configured:
+        assert main(["run-once"]) == 2
+        assert sent == translated == []
+        return
     assert main(["run-once"]) == 0
     assert len(sent) == 1  # Startup never invokes the model.
     assert translated == []
@@ -65,11 +72,13 @@ def test_cli_automatically_translates_only_when_configured(
     history["items"].append(item)
 
     assert main(["run-once", *(["--dry-run"] if dry_run else [])]) == 0
-    assert len(translated) == int(configured and not dry_run)
-    assert len(sent) == (0 if dry_run else 1 + int(configured))
-    if configured and not dry_run:
-        assert sent[1]["card"]["elements"][0]["text"]["content"] == "新的重置消息。"
+    expected_translations = int(configured and language != "en")
+    expected_messages = int(language != "zh") + expected_translations
+    assert len(translated) == (0 if dry_run else expected_translations)
+    assert len(sent) == (0 if dry_run else expected_messages)
+    if expected_translations and not dry_run:
+        assert sent[-1]["card"]["elements"][0]["text"]["content"] == "新的重置消息。"
     if not dry_run:
         assert main(["run-once"]) == 0
-        assert len(translated) == int(configured)
-        assert len(sent) == 1 + int(configured)
+        assert len(translated) == expected_translations
+        assert len(sent) == expected_messages

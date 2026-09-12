@@ -5,13 +5,45 @@ from monitor.config import Config, ConfigError
 
 @pytest.fixture(autouse=True)
 def clean_translation_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in ("OPENAI_BASE_URL", "OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_REASONING_EFFORT", "TRANSLATION_TIMEOUT_SECONDS", "TRANSLATION_MAX_RETRIES"):
+    for name in ("OPENAI_BASE_URL", "OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_REASONING_EFFORT", "TRANSLATION_TIMEOUT_SECONDS", "TRANSLATION_MAX_RETRIES", "SEND_LANGUAGE"):
         monkeypatch.delenv(name, raising=False)
 
 
 def test_translation_is_disabled_without_openai_configuration() -> None:
     assert not Config.from_env().translation_enabled
     assert Config.from_env().translation_reasoning_effort is None
+    assert Config.from_env().send_language is None
+
+
+@pytest.mark.parametrize("raw,expected", [("", None), ("  ", None), ("en", "en"), (" EN ", "en"), ("zh", "zh")])
+def test_send_language_configuration(monkeypatch: pytest.MonkeyPatch, raw: str, expected: str | None) -> None:
+    monkeypatch.setenv("SEND_LANGUAGE", raw)
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://provider.invalid/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "key")
+    monkeypatch.setenv("OPENAI_MODEL", "model")
+    config = Config.from_env()
+    assert config.send_language == expected
+    assert config.translation_enabled == (expected != "en")
+
+
+@pytest.mark.parametrize("raw", ["both", "en,zh", "fr"])
+def test_invalid_send_language_is_rejected(monkeypatch: pytest.MonkeyPatch, raw: str) -> None:
+    monkeypatch.setenv("SEND_LANGUAGE", raw)
+    with pytest.raises(ConfigError, match="SEND_LANGUAGE"):
+        Config.from_env()
+
+
+def test_chinese_only_requires_openai_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SEND_LANGUAGE", "zh")
+    with pytest.raises(ConfigError, match="OPENAI_BASE_URL"):
+        Config.from_env()
+
+
+def test_english_only_does_not_require_openai_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SEND_LANGUAGE", "en")
+    assert not Config.from_env().translation_enabled
+    monkeypatch.setenv("OPENAI_BASE_URL", "unfinished-provider-url")
+    assert not Config.from_env().translation_enabled
 
 
 @pytest.mark.parametrize("raw,expected", [("", None), ("  ", None), (" HIGH ", "high"), ("medium", "medium"), ("none", "none"), ("minimal", "minimal"), ("low", "low"), ("xhigh", "xhigh"), ("max", "max")])
