@@ -123,6 +123,8 @@ uv run pytest
 
 `deploy/` 提供 oneshot service 和五分钟 timer。服务器先执行 `uv sync --locked` 生成锁定的 `.venv`；systemd 直接调用该虚拟环境，不要求运行时通过 uv 启动。当前单元使用部署路径 `/data/resetbeacon-feishu-monitor`、运行用户 `resetbeacon`、环境文件 `/etc/resetbeacon-feishu-monitor.env`。
 
+timer 使用 `OnCalendar=*:0/5`，在每小时的 00、05、10 等分钟触发，允许 15 秒的调度精度。`Persistent=true` 会在恢复后补执行一次错过的轮询。轮询会处理未见过的消息；若不希望补推停机期间的消息，需在恢复 timer 前备份状态库，并将当前 History 和 Alerts 加入去重记录，同时处理旧的待发送队列。
+
 ```bash
 sudo cp deploy/resetbeacon-feishu-monitor.{service,timer} /etc/systemd/system/
 sudo systemctl daemon-reload
